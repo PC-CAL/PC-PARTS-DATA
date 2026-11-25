@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         완본체 부품 계산기
 // @namespace    https://docs.google.com/spreadsheets/d/1BzS5KSx11k-oaLxc37x33lahjWviZfCqObnbBw54D0I
-// @version      0.20.6
+// @version      0.20.7
 // @description  완본체 판매 페이지의 사양표를 OCR로 읽어 '완본체 부품리스트&계산기' 시트에서 부품 스펙과 다나와 최저가를 찾아 견적표로 만들어 줍니다.
 // @license      MIT
 // @match        *://*/*
@@ -658,6 +658,17 @@ const PCC = (() => {
   // opt: { fans: 추가 팬 수(팬갈이면 총 장착 팬 − 케이스 기본 팬, 음수 가능), hdd: HDD 수, gpuMax: 그래픽카드 최대 제한 전력 기준 }
   const PSU_W = { fan: 8, pump: 10, hdd: 10, nvme: 10, sata: 5, ram: 5, ramRgb: 7, mbHigh: 45, mbLow: 30, etc: 15 };
   const PSU_TIERS = [['min', '사용 가능', 15], ['rec', '권장', 50], ['sweet', '스윗스팟', 80]];
+  // 그래픽카드 칩셋 제조사(NVIDIA·AMD) 공식 권장 파워 (Required System Power). 긴 이름부터 맞춤
+  //   RTX 50: 5090 1000W, 5080 850W, 5070 Ti 750W, 5070 650W, 5060 Ti 600W, 5060·5050 550W
+  //   RX 9000: 9070 XT 750W, 9070 650W, 9060 XT 450W / 9070 GRE·9060은 공식 값을 못 찾아 같은 전력대 기준 추정(est)
+  const GPU_PSU_REC = [['5090', 1000], ['5080', 850], ['5070 Ti', 750], ['5070', 650], ['5060 Ti', 600], ['5060', 550], ['5050', 550],
+    ['RX 9070 XT', 750], ['RX 9070 GRE', 650, 'est'], ['RX 9070', 650], ['RX 9060 XT', 450], ['RX 9060', 450, 'est']];
+  const gpuPsuRec = gpu => {
+    if (!gpu) return null;
+    const c = (spec(gpu, '칩셋') || gpu.name).toUpperCase().replace(/\s+/g, ' ');
+    const hit = GPU_PSU_REC.find(([k]) => new RegExp('(^|[^0-9A-Z])' + k.toUpperCase().replace(/ /g, '\\s*') + '(?![0-9A-Z]|\\s*(TI|XT|GRE)\\b)').test(c));
+    return hit ? { chip: hit[0], w: hit[1], est: !!hit[2], maker: /^RX/.test(hit[0]) ? 'AMD' : 'NVIDIA' } : null;
+  };
   const PSU_SIZES = [450, 500, 550, 600, 650, 700, 750, 800, 850, 1000, 1200, 1300, 1500, 1600, 2000];
   const fanCount = s => { const t = String(s || ''); if (/^\s*(x|없음|-)?\s*$/i.test(t)) return 0; return [...t.matchAll(/\*\s*(\d+)/g)].reduce((a, m) => a + Number(m[1]), 0); };
   function psuCalc(rows, opt) {
@@ -702,8 +713,15 @@ const PCC = (() => {
     const load = parts.reduce((a, p) => a + p[1], 0);
     const size = w => PSU_SIZES.find(x => x >= w) || Math.ceil(w / 100) * 100;
     const tiers = PSU_TIERS.map(([key, label, pct]) => ({ key, label, pct, need: Math.round(load * (1 + pct / 100)), w: size(load * (1 + pct / 100)) }));
+    // 권장: 그래픽카드 칩셋 제조사 공식 권장 파워를 우선 (단, '사용 가능'보다 작으면 사용 가능 용량으로)
+    const vr = gpuR ? gpuPsuRec(gpuR.it) : null;
+    if (vr) {
+      const w = Math.max(vr.w, tiers[0].w);
+      Object.assign(tiers[1], { w, need: w, vendor: vr, raised: w > vr.w });
+      if (tiers[2].w < w) tiers[2].w = tiers[2].need = w;
+    }
     const merged = tiers[1].w === tiers[2].w;   // 권장 = 스윗스팟이면 한 줄로
-    return { load, parts, tiers, merged, ready: !!(cpuR || gpuR) };
+    return { load, parts, tiers, merged, vendor: vr, ready: !!(cpuR || gpuR) };
   }
   // 파워 정격 출력: 시트 '정격 출력'(용량 구간 + 이름 숫자로 만든 값) → 이름의 '1000W' → 없음
   //   '용량' 칸은 '1000~1299W' 같은 구간이라 그대로 읽으면 1299W로 잘못 읽힘
@@ -1701,7 +1719,7 @@ const PCC = (() => {
     for (const it of items) { try { fn[it.cat] && fn[it.cat](it); } catch (e) { it.deriveError = String(e); } }
   }
 
-  return { SHEET_ID, SUMMARY_TAB, PARTS, GPU_CHIP_ORDER, gpuChipRank, pkgSticks, sticksFor, FIELD_META, rankOf, ramCapView, coolerSocketOk, m2Heatsinks, laneClass, chipRank, LANE_ORDER, askSpec, averageScores, checkBuild, psuCalc, psuTier, psuWatt, PSU_W, mbForm, isPkg, ramPack, PKG_STICKS, cpuSocket, radFits, psuEps, psuPcie, fetchAll, buildDb, search, parseCsv, num, matchText, matchLine, parseLine, looksLikePart, wordsToText };
+  return { SHEET_ID, SUMMARY_TAB, PARTS, GPU_CHIP_ORDER, gpuChipRank, pkgSticks, sticksFor, FIELD_META, rankOf, ramCapView, coolerSocketOk, m2Heatsinks, laneClass, chipRank, LANE_ORDER, askSpec, averageScores, checkBuild, psuCalc, psuTier, psuWatt, gpuPsuRec, PSU_W, mbForm, isPkg, ramPack, PKG_STICKS, cpuSocket, radFits, psuEps, psuPcie, fetchAll, buildDb, search, parseCsv, num, matchText, matchLine, parseLine, looksLikePart, wordsToText };
 })();
 
 // ===== 화면 =====
@@ -3715,10 +3733,13 @@ const PCC = (() => {
     box.append(det);
     const tile = (label, tr, extra) => el('div', { class: 'ptile' + (tr.key === 'rec' ? ' main' : '') },
       el('div', { class: 'pl', text: label }), el('div', { class: 'pv', text: tr.w + 'W' }), el('div', { class: 'pd', text: extra }));
+    const v = rc.vendor;   // 그래픽카드 칩셋 제조사 공식 권장
+    const recDesc = v ? (rc.raised ? `${v.maker} 권장 ${v.w}W보다 부하가 커서 올림` : `${v.maker} 공식 권장${v.est ? ' (추정)' : ''}`) : `+${rc.pct}% · 순간 피크까지`;
     const tiles = [tile('사용 가능', mn, `+${mn.pct}% · 여유 적음`)];
-    if (pc.merged) tiles.push(tile('권장 · 스윗스팟', rc, `+${rc.pct}% 이상 · 효율 최고 구간`));
-    else tiles.push(tile('권장', rc, `+${rc.pct}% · 순간 피크까지`), tile('스윗스팟', sw, `+${sw.pct}% · 효율 최고 구간`));
+    if (pc.merged) tiles.push(tile('권장 · 스윗스팟', rc, `${v ? recDesc : '+' + rc.pct + '% 이상'} · 효율 최고 구간`));
+    else tiles.push(tile('권장', rc, recDesc), tile('스윗스팟', sw, `+${sw.pct}% · 효율 최고 구간`));
     box.append(el('div', { class: 'ptiles', style: `grid-template-columns:repeat(${tiles.length},1fr)` }, tiles));
+    if (v) box.append(el('div', { class: 'hint', text: `권장 용량은 ${v.maker}가 발표한 ${v.maker === 'NVIDIA' ? 'RTX ' + v.chip : v.chip} 권장 파워(${v.w}W)를 기준으로 합니다${v.est ? ' (공식 값을 찾지 못해 같은 전력대 기준으로 추정)' : ''}. 그래픽카드 제품마다(오버클럭 모델 등) 더 높게 권장하기도 하니 제품 페이지도 확인해 주세요.` }));
     if (pw) {
       const rate = Math.round(pc.load / pw * 100);
       const msg = { low: ['bad', `담은 파워 ${pw}W → 용량 부족 (사용 가능 ${mn.w}W 이상 필요)`], min: ['warnc', `담은 파워 ${pw}W → 사용 가능 (부하율 약 ${rate}%, 권장 ${rc.w}W보다 작음)`],
