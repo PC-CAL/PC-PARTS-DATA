@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         완본체 부품 계산기
 // @namespace    https://docs.google.com/spreadsheets/d/1BzS5KSx11k-oaLxc37x33lahjWviZfCqObnbBw54D0I
-// @version      0.20.5
+// @version      0.20.6
 // @description  완본체 판매 페이지의 사양표를 OCR로 읽어 '완본체 부품리스트&계산기' 시트에서 부품 스펙과 다나와 최저가를 찾아 견적표로 만들어 줍니다.
 // @license      MIT
 // @match        *://*/*
@@ -360,7 +360,11 @@ const PCC = (() => {
         : /그래픽|vga|gpu/.test(l) ? '그래픽카드' : /ssd|저장|하드|storage/.test(l) ? 'SSD' : /파워|psu|power/.test(l) ? '파워서플라이' : /케이스|case/.test(l) ? '케이스' : '';
     }
     if (!cat) for (const [c, re] of CAT_HINTS) { if (re.test(rawLine)) { cat = c; break; } }
-    const kitM = rawLine.match(/(\d+)\s?GB?\s?[x×*]\s?(\d)(?!\d)/i);          // 32GB(16GBx2), 16GX2 → 16GB 2개
+    let kitM = rawLine.match(/(\d+)\s?GB?\s?[x×*]\s?(\d)(?!\d)/i);          // 32GB(16GBx2), 16GX2 → 16GB 2개
+    if (!kitM) {   // OCR이 G를 6으로 읽은 경우: 64GB (326BX 2) → 32GB×2 (적힌 전체 용량과 맞을 때만)
+      const k6 = rawLine.match(/(\d{1,3})\s?6\s?B\s?[x×*]\s?(\d)(?!\d)/i), tot = rawLine.match(/(\d+)\s?GB\b/i);
+      if (k6 && [8, 16, 24, 32, 48, 64].includes(Number(k6[1])) && (!tot || Number(tot[1]) === Number(k6[1]) * Number(k6[2]))) kitM = k6;
+    }
     const capM = kitM ? null : rawLine.match(/(\d+(?:\.\d+)?)\s?(TB|GB)\b/i);
     let cap = kitM ? kitM[1] + 'GB' : capM ? (capM[1] + capM[2].toUpperCase()) : '';
     if (!cap) {   // OCR로 16GB가 1668처럼 읽힌 경우 모양으로 찾기
@@ -374,6 +378,7 @@ const PCC = (() => {
     const color = /화이트|white|흰색|\bwh\b/i.test(rawLine) ? '화이트' : /블랙|black|검정|\bbk\b/i.test(rawLine) ? '블랙' : '';
     const text = rawLine.replace(LABEL, '').replace(NOISE, ' ')
       .replace(/\(?\s*\d+\s?GB?\s?[x×*]\s?\d\s*\)?/gi, ' ')            // (16GBx2), 16GX2
+      .replace(/\(?\s*\d{1,3}\s?6\s?B\s?[x×*]\s?\d\s*\)?/gi, ' ')    // (326BX 2) = 32GB×2를 잘못 읽은 것
       .replace(/\*\s?\d+\s?개/g, ' ').replace(/[™®]/g, ' ')                  // *1개, ™
       .replace(VENDORS, ' ')                                                   // 유통사명(피씨디렉트 등)
       .replace(/\(?(화이트|블랙|white|black|흰색|검정)\)?/gi, ' ');      // 색상은 따로 읽음
