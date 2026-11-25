@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         완본체 부품 계산기
 // @namespace    https://docs.google.com/spreadsheets/d/1BzS5KSx11k-oaLxc37x33lahjWviZfCqObnbBw54D0I
-// @version      0.20.1
+// @version      0.20.3
 // @description  완본체 판매 페이지의 사양표를 OCR로 읽어 '완본체 부품리스트&계산기' 시트에서 부품 스펙과 다나와 최저가를 찾아 견적표로 만들어 줍니다.
 // @license      MIT
 // @match        *://*/*
@@ -700,6 +700,13 @@ const PCC = (() => {
     const merged = tiers[1].w === tiers[2].w;   // 권장 = 스윗스팟이면 한 줄로
     return { load, parts, tiers, merged, ready: !!(cpuR || gpuR) };
   }
+  // 파워 정격 출력: 시트 '정격 출력'(용량 구간 + 이름 숫자로 만든 값) → 이름의 '1000W' → 없음
+  //   '용량' 칸은 '1000~1299W' 같은 구간이라 그대로 읽으면 1299W로 잘못 읽힘
+  function psuWatt(it) {
+    if (!it) return null;
+    const n = (it.name.match(/\d{3,4}/g) || []).map(Number).find(x => x >= 300 && x <= 2500);   // 'SF-850F14XG'처럼 W가 없는 이름
+    return firstW(spec(it, '정격 출력')) || firstW(it.name) || n || null;
+  }
   // 담은 파워가 어느 단계인지: 'low'(부족) | 'min'(사용 가능) | 'rec'(권장) | 'sweet'(스윗스팟)
   function psuTier(calc, pw) {
     if (!pw || !calc) return null;
@@ -1003,7 +1010,7 @@ const PCC = (() => {
     }
     // 파워 용량 (파워 계산기: 부품별 예상 소비 전력 + 마진 %)
     if (psu) {
-      const pw = firstW(psu.name) || firstW(spec(psu, '용량'));
+      const pw = psuWatt(psu);
       const pc = psuCalc(rows, opt && opt.psu);
       if (pw && pc.ready) {
         const [mn, rc, sw] = pc.tiers, t = psuTier(pc, pw), rate = Math.round(pc.load / pw * 100);
@@ -1689,7 +1696,7 @@ const PCC = (() => {
     for (const it of items) { try { fn[it.cat] && fn[it.cat](it); } catch (e) { it.deriveError = String(e); } }
   }
 
-  return { SHEET_ID, SUMMARY_TAB, PARTS, GPU_CHIP_ORDER, gpuChipRank, pkgSticks, sticksFor, FIELD_META, rankOf, ramCapView, coolerSocketOk, m2Heatsinks, laneClass, chipRank, LANE_ORDER, askSpec, averageScores, checkBuild, psuCalc, psuTier, PSU_W, mbForm, isPkg, ramPack, PKG_STICKS, cpuSocket, radFits, psuEps, psuPcie, fetchAll, buildDb, search, parseCsv, num, matchText, matchLine, parseLine, looksLikePart, wordsToText };
+  return { SHEET_ID, SUMMARY_TAB, PARTS, GPU_CHIP_ORDER, gpuChipRank, pkgSticks, sticksFor, FIELD_META, rankOf, ramCapView, coolerSocketOk, m2Heatsinks, laneClass, chipRank, LANE_ORDER, askSpec, averageScores, checkBuild, psuCalc, psuTier, psuWatt, PSU_W, mbForm, isPkg, ramPack, PKG_STICKS, cpuSocket, radFits, psuEps, psuPcie, fetchAll, buildDb, search, parseCsv, num, matchText, matchLine, parseLine, looksLikePart, wordsToText };
 })();
 
 // ===== 화면 =====
@@ -1841,19 +1848,21 @@ const PCC = (() => {
     * { box-sizing: border-box; font-family: 'Pretendard','Malgun Gothic','Apple SD Gothic Neo',sans-serif; }
     .fab { position: fixed; right: 20px; bottom: 20px; touch-action: none; z-index: 2147483646; height: 44px; padding: 0 16px; border-radius: 999px;
       border: none; background: #375623; color: #fff; font-size: 13px; font-weight: 700; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.25); white-space: nowrap; }
-    .panel { position: fixed; top: 0; right: 0; z-index: 2147483647; width: 420px; max-width: 100vw; height: 100vh; background: #fff;
+    .panel { position: fixed; top: 0; right: 0; z-index: 2147483647; width: 560px; max-width: 100vw; height: 100vh; background: #fff;
       color: #1f2328; box-shadow: -4px 0 18px rgba(0,0,0,.18); display: flex; flex-direction: column; font-size: 13px; }
     .panel[hidden], .fab[hidden] { display: none; }
     header { background: #375623; color: #fff; padding: 10px 12px 0; }
     header .row { display: flex; align-items: center; gap: 8px; }
     header h1 { font-size: 15px; margin: 0; flex: 1; }
-    header .meta { font-size: 11px; opacity: .85; margin-top: 4px; line-height: 1.4; }
+    header .meta { font-size: 11px; opacity: .85; margin-top: 4px; line-height: 1.5; }
+    header .meta .mrow { display: flex; flex-wrap: wrap; column-gap: 0; } header .meta .mi { white-space: nowrap; } header .meta .mi + .mi::before { content: '·'; margin: 0 6px; }
     header button { background: rgba(255,255,255,.15); color: #fff; border: 1px solid rgba(255,255,255,.35); border-radius: 6px;
       padding: 3px 8px; font-size: 12px; cursor: pointer; }
     header button[data-act=close] { background: #cf222e; border-color: #cf222e; font-weight: 700; } header button[data-act=close]:hover { background: #a40e26; }
     .tabs { display: flex; gap: 2px; margin-top: 8px; }
-    .tabs button { flex: 1; border: none; border-radius: 8px 8px 0 0; background: rgba(255,255,255,.12); color: #fff; padding: 7px; font-size: 13px; }
+    .tabs button { flex: 1; border: none; border-radius: 8px 8px 0 0; background: rgba(255,255,255,.12); color: #fff; padding: 7px 4px; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     .tabs button.on { background: #fff; color: #375623; font-weight: 700; }
+    @media (max-width: 440px) { .tabs button { font-size: 12px; padding: 7px 2px; } }
     .controls { padding: 10px 12px; border-bottom: 1px solid #e5e7eb; display: flex; flex-direction: column; gap: 8px; }
     input, textarea, select { font-size: 13px; border: 1px solid #c9ced6; border-radius: 6px; padding: 6px 8px; background: #fff; color: #1f2328; }
     .controls input { width: 100%; padding: 8px 10px; }
@@ -2839,11 +2848,17 @@ const PCC = (() => {
   function render() {
     root.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.mode === state.mode));
     const scriptVer = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) ? `스크립트 v${GM_info.script.version}` : '';
+    // 위쪽 정보: 항목마다 줄바꿈 없이, 줄은 항목 사이에서만 넘어감 (1줄: 스크립트·데이터 버전, 2줄: 다나와 갱신·불러온 시각)
+    const mi = t => el('span', { class: 'mi', text: t });
     if (db) {
-      const when = new Date(db.loadedAt);
-      meta.textContent = [scriptVer, `데이터 ${(db.rules.version || '버전 정보 없음').replace(/^.*?:\s*/, '')}`, db.rules.priceDate || '',
-        `불러온 시각 ${when.toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`, state.progress].filter(Boolean).join(' · ');
-    } else meta.textContent = scriptVer;
+      const when = new Date(db.loadedAt), pad = n => String(n).padStart(2, '0');
+      const pd = String(db.rules.priceDate || '').replace(/^.*?:\s*/, ''), m = pd.match(/(\d{4})년\s*(\d+)월\s*(\d+)일\s*(\d{1,2}:\d{2})?/);
+      const price = m ? `다나와 갱신 ${m[2]}/${m[3]}${m[4] ? ' ' + m[4] : ''}` : (pd ? '다나와 갱신 ' + pd : '');
+      const loaded = `불러온 시각 ${when.getMonth() + 1}/${when.getDate()} ${pad(when.getHours())}:${pad(when.getMinutes())}`;
+      meta.replaceChildren(
+        el('div', { class: 'mrow' }, [scriptVer, `데이터 ${(db.rules.version || '버전 정보 없음').replace(/^.*?:\s*/, '')}`].filter(Boolean).map(mi)),
+        el('div', { class: 'mrow' }, [price, loaded, state.progress].filter(Boolean).map(mi)));
+    } else meta.replaceChildren(scriptVer ? el('div', { class: 'mrow' }, mi(scriptVer)) : '');
     body.replaceChildren();
     panel.classList.toggle('wide', ((state.mode === 'saved' && !!state.compare) || (state.mode === 'parts' && loadPartCmp().length > 1)) && !state.selected);
     if (state.error) body.append(el('div', { class: 'msg err', text: state.error }));
@@ -3639,7 +3654,7 @@ const PCC = (() => {
     const rows = checkRows(), pc = PCC.psuCalc(rows, build.psu || {});
     if (!pc.ready) return null;
     const psuR = rows.find(r => r.it.cat === '파워서플라이');
-    const pw = psuR ? (Number((psuR.it.name.match(/(\d{3,4})\s*W/i) || [])[1]) || null) : null;
+    const pw = psuR ? PCC.psuWatt(psuR.it) : null;
     const t = PCC.psuTier(pc, pw), rc = pc.tiers[1];
     const judge = t ? { low: ['bad', '부족'], min: ['warnc', '여유 적음'], rec: ['good', '권장 이상'], sweet: ['good', '스윗스팟'] }[t] : null;
     return el('div', { class: 'sum pline1', title: '눌러서 파워 계산 탭 열기', onclick: () => { state.mode = 'power'; render(); } },
@@ -3653,7 +3668,7 @@ const PCC = (() => {
     const rows = checkRows(), pc = PCC.psuCalc(rows, po);
     if (!pc.ready) return null;
     const psuR = rows.find(r => r.it.cat === '파워서플라이');
-    const pw = psuR ? (Number((psuR.it.name.match(/(\d{3,4})\s*W/i) || [])[1]) || null) : null;
+    const pw = psuR ? PCC.psuWatt(psuR.it) : null;
     const t = PCC.psuTier(pc, pw);
     const [mn, rc, sw] = pc.tiers;
     const box = el('div', { class: 'sum power' }, el('div', { class: 'sec', style: 'margin-top:0', text: '파워 계산' }));
