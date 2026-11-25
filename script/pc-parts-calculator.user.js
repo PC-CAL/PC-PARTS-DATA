@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         완본체 부품 계산기
 // @namespace    https://docs.google.com/spreadsheets/d/1BzS5KSx11k-oaLxc37x33lahjWviZfCqObnbBw54D0I
-// @version      0.20.3
+// @version      0.20.4
 // @description  완본체 판매 페이지의 사양표를 OCR로 읽어 '완본체 부품리스트&계산기' 시트에서 부품 스펙과 다나와 최저가를 찾아 견적표로 만들어 줍니다.
 // @license      MIT
 // @match        *://*/*
@@ -2774,7 +2774,10 @@ const PCC = (() => {
   }
 
   // ----- 패널 열기/닫기, 단축키 -----
-  const applyFab = () => { fab.hidden = !panel.hidden || !GM_getValue(FAB_KEY, false); if (!fab.hidden && typeof placeFab === 'function') placeFab(); };
+  // 화면 버튼 기본값: 휴대폰(터치)이거나 메뉴 명령을 못 쓰는 환경(AdGuard 등)이면 켬
+  const HAS_MENU = typeof GM_registerMenuCommand === 'function';
+  const fabDefault = () => !HAS_MENU || (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+  const applyFab = () => { fab.hidden = !panel.hidden || !GM_getValue(FAB_KEY, fabDefault()); if (!fab.hidden && typeof placeFab === 'function') placeFab(); };
   function openPanel() { panel.hidden = false; applyFab(); if (!state.loading) loadData(false); else render(); }
   function closePanel() { panel.hidden = true; applyFab(); }
   const togglePanel = () => (panel.hidden ? openPanel() : closePanel());
@@ -3825,9 +3828,11 @@ const PCC = (() => {
 
   (document.body || document.documentElement).append(host);
   applyFab();
-  GM_registerMenuCommand('부품 계산기 열기/닫기', togglePanel);
-  GM_registerMenuCommand('단축키 바꾸기', () => { capturing = true; showToast('원하는 단축키를 누르세요. 지금: ' + comboText(getShortcut()) + ' (취소: Esc)'); });
-  GM_registerMenuCommand('데이터 새로고침', () => { openPanel(); loadData(true); });
-  GM_registerMenuCommand('화면 버튼 보이기/숨기기', () => { GM_setValue(FAB_KEY, !GM_getValue(FAB_KEY, false)); applyFab(); });
-  GM_registerMenuCommand('화면 버튼 위치 초기화', () => { GM_setValue(FABPOS_KEY, null); placeFab(); });
+  if (HAS_MENU) {
+    GM_registerMenuCommand('부품 계산기 열기/닫기', togglePanel);
+    GM_registerMenuCommand('단축키 바꾸기', () => { capturing = true; showToast('원하는 단축키를 누르세요. 지금: ' + comboText(getShortcut()) + ' (취소: Esc)'); });
+    GM_registerMenuCommand('데이터 새로고침', () => { openPanel(); loadData(true); });
+    GM_registerMenuCommand('화면 버튼 보이기/숨기기', () => { GM_setValue(FAB_KEY, !GM_getValue(FAB_KEY, fabDefault())); applyFab(); });
+    GM_registerMenuCommand('화면 버튼 위치 초기화', () => { GM_setValue(FABPOS_KEY, null); placeFab(); });
+  }
 })();
