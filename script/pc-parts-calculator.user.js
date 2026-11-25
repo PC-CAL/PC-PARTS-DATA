@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         완본체 부품 계산기
 // @namespace    https://docs.google.com/spreadsheets/d/1BzS5KSx11k-oaLxc37x33lahjWviZfCqObnbBw54D0I
-// @version      0.20.9
+// @version      0.21.1
 // @description  완본체 판매 페이지의 사양표를 OCR로 읽어 '완본체 부품리스트&계산기' 시트에서 부품 스펙과 다나와 최저가를 찾아 견적표로 만들어 줍니다.
 // @license      MIT
 // @match        *://*/*
@@ -345,6 +345,8 @@ const PCC = (() => {
       // RX9070XT, RTX5070Ti 처럼 붙어 쓴 모델명 → rx / 9070 / xt
       const m = t.match(/^([a-z]{2,4})(\d{3,5})([a-z]{1,5})?$/);
       if (m) { extra.push(m[1], m[2]); if (m[3]) extra.push(m[3]); }
+      // 한글과 영문이 붙어 있으면 나눔 (게이밍X → 게이밍 / x)
+      if (/[가-힣][a-z]|[a-z][가-힣]/.test(t)) for (const p of t.split(/(?<=[가-힣])(?=[a-z])|(?<=[a-z])(?=[가-힣])/)) if (p) extra.push(p);
     }
     return base.concat(extra);
   };
@@ -365,6 +367,10 @@ const PCC = (() => {
       const k6 = rawLine.match(/(\d{1,3})\s?6\s?B\s?[x×*]\s?(\d)(?!\d)/i), tot = rawLine.match(/(\d+)\s?GB\b/i);
       if (k6 && [8, 16, 24, 32, 48, 64].includes(Number(k6[1])) && (!tot || Number(tot[1]) === Number(k6[1]) * Number(k6[2]))) kitM = k6;
     }
+    if (!kitM && (cat === 'RAM' || /DDR\d/i.test(rawLine))) {   // 램: GB 없이 "(16X1)", "16x2"처럼 낱개 용량×개수만 적은 경우
+      const kn = rawLine.match(/\(?\b(8|16|24|32|48|64)\s?[x×*]\s?([1-8])\b\)?/i), tot = rawLine.match(/(\d+)\s?GB\b/i);
+      if (kn && (!tot || Number(tot[1]) === Number(kn[1]) * Number(kn[2]))) kitM = kn;
+    }
     const capM = kitM ? null : rawLine.match(/(\d+(?:\.\d+)?)\s?(TB|GB)\b/i);
     let cap = kitM ? kitM[1] + 'GB' : capM ? (capM[1] + capM[2].toUpperCase()) : '';
     if (!cap) {   // OCR로 16GB가 1668처럼 읽힌 경우 모양으로 찾기
@@ -379,6 +385,7 @@ const PCC = (() => {
     const text = rawLine.replace(LABEL, '').replace(NOISE, ' ')
       .replace(/\(?\s*\d+\s?GB?\s?[x×*]\s?\d\s*\)?/gi, ' ')            // (16GBx2), 16GX2
       .replace(/\(?\s*\d{1,3}\s?6\s?B\s?[x×*]\s?\d\s*\)?/gi, ' ')    // (326BX 2) = 32GB×2를 잘못 읽은 것
+      .replace(kitM && !/G/i.test(kitM[0]) ? kitM[0] : /$^/, ' ')               // 램 (16X1)
       .replace(/\*\s?\d+\s?개/g, ' ').replace(/[™®]/g, ' ')                  // *1개, ™
       .replace(VENDORS, ' ')                                                   // 유통사명(피씨디렉트 등)
       .replace(/\(?(화이트|블랙|white|black|흰색|검정)\)?/gi, ' ');      // 색상은 따로 읽음
@@ -421,12 +428,29 @@ const PCC = (() => {
       if (hasTok(it, t)) hit += tw;
       else if ((/\d/.test(t) || t.length >= 5) && stoks[i].length >= 3 && it.shape.includes(stoks[i])) hit += tw * 0.85;   // 모양 보정은 숫자가 섞였거나 긴 단어만
       else if (t.length >= 6 && /\d/.test(t) && ns.some(n => n.length >= 5 && near1(stoks[i], n))) hit += tw * 0.75;   // 글자 하나 더/덜 읽힘 (RC1I400N → RC1400N)
+      else {   // 붙여 쓴 단어(MWE850, 게이밍X): 나눈 조각이 모두 제품명에 있으면 맞은 것으로
+        const gm = t.match(/^([a-z]{2,4})(\d{3,5})([a-z]{1,5})?$/), parts = gm ? gm.slice(1).filter(Boolean)
+          : /[가-힣][a-z]|[a-z][가-힣]/.test(t) ? t.split(/(?<=[가-힣])(?=[a-z])|(?<=[a-z])(?=[가-힣])/) : null;
+        if (parts && parts.length > 1 && parts.every(q => hasTok(it, q))) hit += tw;
+      }
     });
     const nt = it.nameToks;
     const cov = nt.length ? nt.filter((t, j) => toks.some((x, i) => x.includes(t) || t.includes(x) || (ns[j].length >= 3 && (stoks[i] === ns[j] || stoks[i].includes(ns[j]))))).length / nt.length : 0;
     return 0.6 * (hit / w) + 0.4 * cov;
   }
 
+  // 램을 "컴이지 DDR4 16GB"처럼 제조사·세대·용량만 적은 경우: 그 제조사의 같은 세대 램 중 그 용량이 있는 제품 (가격 낮은 순, 추정)
+  function ramGuess(db, p, toks) {
+    const gen = (p.line.match(/DDR\s?([345])/i) || [])[1];
+    const lineBrands = toks.map(t => t.replace(/[\[\]]/g, '')).filter(t => BRANDS.has(t) && !GENERIC.has(t));
+    if (!gen || (p.cat && p.cat !== 'RAM') || !lineBrands.length) return null;
+    const optOk = q => !p.cap || String(q.opt).replace(/\s/g, '').toUpperCase() === p.cap;
+    const low = it => { const ps = it.prices.filter(q => q.price != null && optOk(q)).map(q => q.price); return ps.length ? Math.min(...ps) : Infinity; };
+    const g = db.items.filter(it => it.cat === 'RAM' && new RegExp('DDR' + gen, 'i').test(it.name) && (!p.cap || it.prices.some(optOk))
+      && lineBrands.some(b => it.search.includes(b) || (toEnglish(b) && toEnglish(b).split(' ').some(e => e && it.search.includes(e)))))
+      .sort((a, b) => low(a) - low(b));
+    return g.length ? { ...p, cat: 'RAM', cands: g.slice(0, 8).map(it => ({ it, s: 0.5 })), guess: true } : null;
+  }
   function matchLine(db, line) {
     const p = parseLine(line);
     if (!p.text || p.text.length < 2) return null;
@@ -434,6 +458,7 @@ const PCC = (() => {
     // [AMD], [ASUS], [COOLER MASTER] 처럼 제조사 이름만 있는 줄은 제품이 아님 (다음 줄과 합쳐서 판단)
     if (toks.every(t => BRANDS.has(t.replace(/[\[\]]/g, '')) || GENERIC.has(t.replace(/[\[\]]/g, '')) || /^[^a-z0-9가-힣]+$/.test(t))) {
       const genericOnly = toks.every(t => GENERIC.has(t.replace(/[\[\]]/g, '')) || /^[^a-z0-9가-힣]+$/.test(t));   // "PLUS (블랙)"처럼 제조사 없이 일반 단어만
+      const rg = ramGuess(db, p, toks); if (rg) return rg;
       return { ...p, cands: [], weak: true, brandOnly: true, genericOnly, cat: p.cat };
     }
     const pool = p.cat ? db.items.filter(it => it.cat === p.cat) : db.items;
@@ -470,7 +495,10 @@ const PCC = (() => {
     cands = cands.slice(0, 8);
     // 사진 속 글자 조각 같은 쓰레기 줄 거르기: 점수가 충분하고, 3글자 이상 단어가 실제로 하나 이상 맞아야 함
     const strongHit = it => toks.some((t, i) => t.length >= 3 && !GENERIC.has(t) && !BRANDS.has(t) && /[a-z가-힣]|\d{3}/.test(t) && (hasTok(it, t) || ((/\d/.test(t) || t.length >= 5) && stoks[i].length >= 3 && it.shape && it.shape.includes(stoks[i]))));
-    if (!cands.length || cands[0].s < 0.5 || !strongHit(cands[0].it)) return { ...p, cands: [], weak: true, cat: p.cat };
+    if (!cands.length || cands[0].s < 0.5 || !strongHit(cands[0].it)) {
+      const rg = ramGuess(db, p, toks); if (rg) return rg;
+      return { ...p, cands: [], weak: true, cat: p.cat };
+    }
     return { ...p, cands, cat: p.cat || (cands[0] && cands[0].it.cat) || '' };
   }
 
@@ -2078,6 +2106,7 @@ const PCC = (() => {
     .crop .stage img { display: block; max-width: calc(100vw - 48px); height: auto; pointer-events: none; }
     .crop .sel { position: absolute; border: 2px solid #4ade80; background: rgba(74,222,128,.15); box-shadow: 0 0 0 9999px rgba(0,0,0,.35); pointer-events: none; }
     .crop .stage { touch-action: none; }
+    .crop .quick { position: absolute; z-index: 2; display: flex; gap: 4px; background: #fff; padding: 4px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.35); }
     .onlytouch { display: none; }
     /* 휴대폰 (좁은 화면·터치) */
     @media (max-width: 600px), (pointer: coarse) {
@@ -2229,6 +2258,7 @@ const PCC = (() => {
   }
   function runMatch() {
     const results = PCC.matchText(db, build.text);
+    const prev = build.rows || [];   // 다시 찾기 전 행 (손으로 바꾼 내용을 살리기 위해)
     build.rows = []; build.misses = [];
     for (const m of results) {
       if (!m.cands.length) { if (!/^\s*(os|운영|윈도우|windows)/i.test(m.line) && PCC.looksLikePart(m.orig || m.line) && !m.brandOnly && !m.section) build.misses.push(m.orig || m.line); continue; }
@@ -2241,6 +2271,16 @@ const PCC = (() => {
       if (sameIdx >= 0) { if (row.score > build.rows[sameIdx].score) build.rows[sameIdx] = row; continue; }
       build.rows.push(row);
     }
+    // 사진을 나눠 여러 번 읽을 때 앞에서 손으로 고친 내용 유지:
+    //   같은 읽은 글자에서 나온 행은 고른 후보·옵션·개수·직접 입력 가격·램 가격 기준을 그대로,
+    //   '부품 직접 추가'로 넣은 행(읽은 글자 없음)은 그대로 남김
+    for (const r of build.rows) {
+      const o = prev.find(x => x.line && x.line === r.line);
+      if (!o) continue;
+      Object.assign(r, { key: o.key, cat: o.cat, opt: o.opt, count: o.count, custom: o.custom, ramMode: o.ramMode });
+      if (!r.cands.includes(o.key)) r.cands.unshift(o.key);
+    }
+    for (const o of prev) if (!o.line && !build.rows.some(x => x.key === o.key)) build.rows.push(o);
     build.rows.sort((a, b) => CAT_ORDER.indexOf(a.cat) - CAT_ORDER.indexOf(b.cat));
     // 이미 찾은 종류의 부품 조각(두 번 읽기에서 나온 잔여 줄 등)은 '찾지 못함'에서 뺌
     const have = new Set(build.rows.map(r => r.cat));
@@ -2415,21 +2455,47 @@ const PCC = (() => {
     }
     const img = el('img', { src: url, alt: '' });
     const sel = el('div', { class: 'sel', style: 'display:none' });
-    const stage = el('div', { class: 'stage' }, img, sel);
-    let start = null, rect = null, onMove, onUp;
+    // 선택 박스 바로 아래(공간이 없으면 위)에 뜨는 작은 버튼: 이 영역 읽기 / 다시
+    const quick = el('div', { class: 'quick', style: 'display:none' },
+      el('button', { class: 'btn sm', text: '이 영역 읽기', onpointerdown: e => e.stopPropagation(), onclick: () => go(true) }),
+      el('button', { class: 'btn ghost sm', text: '다시', onpointerdown: e => e.stopPropagation(), onclick: () => clearSel() }));
+    const stage = el('div', { class: 'stage' }, img, sel, quick);
+    let start = null, rect = null, onMove, onUp, onKey;
+    const hasSel = () => !!(rect && rect.w > 8 && rect.h > 8);
     const pos = e => { const b = stage.getBoundingClientRect(); return { x: Math.max(0, Math.min(e.clientX - b.left, b.width)), y: Math.max(0, Math.min(e.clientY - b.top, b.height)) }; };
-    stage.addEventListener('pointerdown', e => { e.preventDefault(); try { stage.setPointerCapture(e.pointerId); } catch (_) {} start = pos(e); rect = null; sel.style.display = 'none'; });
+    // 선택이 있으면 '선택 영역 읽기', 없으면 '전체 읽기'가 진한(주) 버튼
+    const selBtn = el('button', { class: 'btn ghost', text: '선택 영역 읽기', onclick: () => go(true) });
+    const allBtn = el('button', { class: 'btn', text: '전체 읽기', onclick: () => go(false) });
+    const syncBtns = () => {
+      const on = hasSel();
+      selBtn.className = on ? 'btn' : 'btn ghost'; allBtn.className = on ? 'btn ghost' : 'btn';
+      selBtn.title = on ? 'Enter' : '먼저 사양 부분을 드래그해서 선택하세요';
+      if (on) {
+        quick.style.display = 'flex';
+        const below = rect.y + rect.h + 6, h = quick.offsetHeight || 30;
+        const top = below + h <= stage.clientHeight ? below : Math.max(0, rect.y - h - 6);
+        const left = Math.min(rect.x, Math.max(0, stage.clientWidth - (quick.offsetWidth || 150)));
+        Object.assign(quick.style, { top: top + 'px', left: left + 'px' });
+      } else quick.style.display = 'none';
+    };
+    const clearSel = () => { rect = null; sel.style.display = 'none'; syncBtns(); };
+    stage.addEventListener('pointerdown', e => { e.preventDefault(); try { stage.setPointerCapture(e.pointerId); } catch (_) {} start = pos(e); rect = null; sel.style.display = 'none'; quick.style.display = 'none'; });
     window.addEventListener('pointermove', onMove = e => {
       if (!start) return; const p = pos(e);
       rect = { x: Math.min(start.x, p.x), y: Math.min(start.y, p.y), w: Math.abs(p.x - start.x), h: Math.abs(p.y - start.y) };
       Object.assign(sel.style, { display: 'block', left: rect.x + 'px', top: rect.y + 'px', width: rect.w + 'px', height: rect.h + 'px' });
     });
-    window.addEventListener('pointerup', onUp = () => { start = null; });
+    window.addEventListener('pointerup', onUp = () => { if (!start) return; start = null; if (!hasSel()) clearSel(); else syncBtns(); });
     window.addEventListener('pointercancel', onUp);
-    const close = () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); window.removeEventListener('pointercancel', onUp); URL.revokeObjectURL(url); modal.remove(); };
+    // Enter: 선택이 있으면 그 영역, 없으면 전체 / Esc: 닫기
+    window.addEventListener('keydown', onKey = e => {
+      if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); go(hasSel()); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+    }, true);
+    const close = () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); window.removeEventListener('pointercancel', onUp); window.removeEventListener('keydown', onKey, true); URL.revokeObjectURL(url); modal.remove(); };
     const go = useRect => {
       let region = null;
-      if (useRect && rect && rect.w > 8 && rect.h > 8) {
+      if (useRect && hasSel()) {
         const k = bitmap.width / img.clientWidth;
         region = { x: Math.round(rect.x * k), y: Math.round(rect.y * k), w: Math.round(rect.w * k), h: Math.round(rect.h * k) };
       }
@@ -2437,13 +2503,12 @@ const PCC = (() => {
     };
     const modal = el('div', { class: 'crop' },
       el('div', { class: 'bar' },
-        el('b', { text: '사양이 적힌 부분을 드래그(휴대폰은 손가락으로 끌기)해서 선택하세요. 좁게 고를수록 정확합니다.' }),
-        el('button', { class: 'btn', text: '선택 영역 읽기', onclick: () => go(true) }),
-        el('button', { class: 'btn ghost', text: '전체 읽기', onclick: () => go(false) }),
-        el('button', { class: 'btn ghost', text: '취소', onclick: close })),
+        el('b', { text: isTouch ? '사양이 적힌 부분을 손가락으로 끌어서 선택하세요. 좁게 고를수록 정확합니다.' : '사양이 적힌 부분을 드래그해서 선택하고 Enter를 누르세요. 좁게 고를수록 정확합니다.' }),
+        selBtn, allBtn,
+        el('button', { class: 'btn ghost', text: '취소', onclick: () => close() })),
       el('div', { class: 'area' }, stage));
-    modal.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
     root.append(modal);
+    syncBtns();
   }
   // 페이지의 이미지를 클릭해서 고르기
   function pickPageImage() {
