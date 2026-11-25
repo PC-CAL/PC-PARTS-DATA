@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         완본체 부품 계산기
 // @namespace    https://docs.google.com/spreadsheets/d/1BzS5KSx11k-oaLxc37x33lahjWviZfCqObnbBw54D0I
-// @version      0.19.6
+// @version      0.20.0
 // @description  완본체 판매 페이지의 사양표를 OCR로 읽어 '완본체 부품리스트&계산기' 시트에서 부품 스펙과 다나와 최저가를 찾아 견적표로 만들어 줍니다.
 // @license      MIT
 // @match        *://*/*
@@ -645,6 +645,68 @@ const PCC = (() => {
   const firstW = s => { const m = String(s || '').match(/(\d{2,4})\s*W/i); return m ? Number(m[1]) : null; };
   const scoreNum = s => { const v = parseFloat(String(s || '').replace(/[^\d.]/g, '')); return isNaN(v) ? null : v; };
 
+
+  // ===== 파워 계산기 =====
+  // 예상 최대 소비 전력(부하)을 부품별로 더하고, 마진(%)을 붙여 세 단계 용량을 냄
+  //   사용 가능 +15% (부하율 약 87%) / 권장 +50% (약 67%) / 스윗스팟 +80% (약 55%, 효율이 가장 높은 50~60% 구간의 가운데)
+  //   용량은 실제 파워 용량 단위로 올림. 권장과 스윗스팟이 같은 용량이면 합침
+  // opt: { fans: 추가 팬 수(팬갈이면 총 장착 팬 − 케이스 기본 팬, 음수 가능), hdd: HDD 수, gpuMax: 그래픽카드 최대 제한 전력 기준 }
+  const PSU_W = { fan: 8, pump: 10, hdd: 10, nvme: 10, sata: 5, ram: 5, ramRgb: 7, mbHigh: 45, mbLow: 30, etc: 15 };
+  const PSU_TIERS = [['min', '사용 가능', 15], ['rec', '권장', 50], ['sweet', '스윗스팟', 80]];
+  const PSU_SIZES = [450, 500, 550, 600, 650, 700, 750, 800, 850, 1000, 1200, 1300, 1500, 1600, 2000];
+  const fanCount = s => { const t = String(s || ''); if (/^\s*(x|없음|-)?\s*$/i.test(t)) return 0; return [...t.matchAll(/\*\s*(\d+)/g)].reduce((a, m) => a + Number(m[1]), 0); };
+  function psuCalc(rows, opt) {
+    opt = opt || {};
+    const one = cat => rows.find(r => r.it && r.it.cat === cat);
+    const cpuR = one('CPU'), gpuR = one('그래픽카드'), mbR = one('메인보드'), coolR = one('CPU쿨러'), caseR = one('케이스'), ramR = one('RAM');
+    const parts = [];   // [이름, W, 설명]
+    if (cpuR) { const w = firstW(spec(cpuR.it, '소비 전력 / 권장 전원부')); if (w) parts.push(['CPU', w, '최대 소비 전력']); }
+    if (gpuR) {
+      const t = spec(gpuR.it, '소비 전력(최대 제한 전력)'), base = firstW(t), mx = Number((String(t).match(/\((\d+)\s*W\)/i) || [])[1]) || null;
+      const useMax = !!(opt.gpuMax && mx), w = useMax ? mx : base;
+      if (w) parts.push(['그래픽카드', w, useMax ? '최대 제한 전력' : '기본 전력']);
+    }
+    if (mbR) { const c = spec(mbR.it, '칩셋') || mbR.it.name; const hi = /\b[XZ]\d{3}/i.test(c); parts.push(['메인보드', hi ? PSU_W.mbHigh : PSU_W.mbLow, hi ? 'X·Z 칩셋' : 'B·A·H 칩셋']); }
+    if (ramR) {
+      const sticks = (ramR.count || 1) * (isPkg(ramR.it) ? sticksFor(ramR.it, ramR.opt) : 1);
+      const rgb = /\/\s*있음/.test(spec(ramR.it, '방열판과 RGB 유무')), per = rgb ? PSU_W.ramRgb : PSU_W.ram;
+      parts.push(['램', sticks * per, `${sticks}장 × ${per}W${rgb ? ' (RGB)' : ''}`]);
+    }
+    const ssds = rows.filter(r => r.it && r.it.cat === 'SSD');
+    if (ssds.length) {
+      let nv = 0, sa = 0; ssds.forEach(r => { const n = r.count || 1; if (/sata/i.test(r.it.name + ' ' + spec(r.it, '분류'))) sa += n; else nv += n; });
+      parts.push(['SSD', nv * PSU_W.nvme + sa * PSU_W.sata, [nv ? `NVMe ${nv}개 × ${PSU_W.nvme}W` : '', sa ? `SATA ${sa}개 × ${PSU_W.sata}W` : ''].filter(Boolean).join(', ')]);
+    }
+    // 팬: 쿨러 팬 + 케이스 기본 팬 + 추가 팬. 팬 미포함 수랭은 라디 크기만큼 팬을 단 기준
+    let coolFans = 0, pump = false, coolNote = '';
+    if (coolR) {
+      const it = coolR.it, water = /\//.test(spec(it, '수치')) || /수랭/.test(spec(it, '분류'));
+      pump = water; coolFans = fanCount(spec(it, '팬 사양'));
+      if (!coolFans && water) {
+        const m = it.name.match(/(120|140|240|280|360|420|480)/);
+        if (m) { const z = Number(m[1]); coolFans = { 120: 1, 140: 1, 240: 2, 280: 2, 360: 3, 420: 3, 480: 4 }[z]; coolNote = ', 팬 미포함 → 라디 크기만큼 단 기준'; }
+      }
+    }
+    const caseFans = caseR ? fanCount(spec(caseR.it, '기본 제공 팬')) : 0;
+    const extra = Math.round(Number(opt.fans) || 0), fans = Math.max(0, coolFans + caseFans + extra);
+    if (fans) parts.push(['팬', fans * PSU_W.fan, `${fans}개 × ${PSU_W.fan}W (쿨러 ${coolFans}${coolNote} · 케이스 기본 ${caseFans}${extra ? ` · 추가 ${extra > 0 ? '+' : ''}${extra}` : ''})`]);
+    if (pump) parts.push(['수랭 펌프', PSU_W.pump, '']);
+    const hdd = Math.max(0, Math.round(Number(opt.hdd) || 0));
+    if (hdd) parts.push(['HDD', hdd * PSU_W.hdd, `${hdd}개 × ${PSU_W.hdd}W`]);
+    parts.push(['USB·기타', PSU_W.etc, '키보드·마우스 등']);
+    const load = parts.reduce((a, p) => a + p[1], 0);
+    const size = w => PSU_SIZES.find(x => x >= w) || Math.ceil(w / 100) * 100;
+    const tiers = PSU_TIERS.map(([key, label, pct]) => ({ key, label, pct, need: Math.round(load * (1 + pct / 100)), w: size(load * (1 + pct / 100)) }));
+    const merged = tiers[1].w === tiers[2].w;   // 권장 = 스윗스팟이면 한 줄로
+    return { load, parts, tiers, merged, ready: !!(cpuR || gpuR) };
+  }
+  // 담은 파워가 어느 단계인지: 'low'(부족) | 'min'(사용 가능) | 'rec'(권장) | 'sweet'(스윗스팟)
+  function psuTier(calc, pw) {
+    if (!pw || !calc) return null;
+    const [mn, rc, sw] = calc.tiers;
+    return pw >= sw.need ? 'sweet' : pw >= rc.need ? 'rec' : pw >= mn.need ? 'min' : 'low';
+  }
+
   function averageScores(rows) {
     // 시트 계산기와 같이 케이스는 빼고(점수 없음) 나머지 부품의 평균
     const rs = rows.filter(r => r.it && r.it.cat !== '케이스');
@@ -831,7 +893,7 @@ const PCC = (() => {
 
   // Y자 8핀 케이블을 써도 괜찮은 그래픽카드 최대 전력 (그래픽카드 8핀 개수별): 8핀 2개 카드는 약 220W, 3개 이상 카드는 약 360W까지
   const Y_CABLE_MAX_W = n8 => n8 <= 2 ? 220 : 360;
-  function checkBuild(rows) {
+  function checkBuild(rows, opt) {
     const R = [];
     const add = (level, title, detail) => R.push({ level, title, detail: detail || '' });
     const one = cat => (rows.find(r => r.it && r.it.cat === cat) || {}).it;
@@ -939,16 +1001,15 @@ const PCC = (() => {
           : add('ok', `램과 쿨러 간섭 없음 (램 ${rh}mm / 최대 ${mm(lim)}mm)`);
       }
     }
-    // 파워 용량
+    // 파워 용량 (파워 계산기: 부품별 예상 소비 전력 + 마진 %)
     if (psu) {
       const pw = firstW(psu.name) || firstW(spec(psu, '용량'));
-      const cw = cpu ? firstW(spec(cpu, '소비 전력 / 권장 전원부')) : null;
-      const gw = gpu ? firstW(spec(gpu, '소비 전력(최대 제한 전력)')) : null;
-      if (pw && (cw || gw)) {
-        const est = (cw || 0) + (gw || 0) + 75;   // 나머지 부품(보드·램·SSD·팬) 대략 75W
-        if (est > pw) add('bad', '파워 용량 부족', `예상 최대 소비 ${est}W (CPU ${cw || '-'}W + 그래픽카드 ${gw || '-'}W + 기타 75W), 파워 ${pw}W`);
-        else if (est > pw * 0.8) add('warn', '파워 용량 여유가 적음', `예상 최대 소비 ${est}W, 파워 ${pw}W (${Math.round(est / pw * 100)}%) → 한 단계 큰 용량을 권장합니다.`);
-        else add('ok', `파워 용량 여유 (예상 ${est}W / ${pw}W)`);
+      const pc = psuCalc(rows, opt && opt.psu);
+      if (pw && pc.ready) {
+        const [mn, rc, sw] = pc.tiers, t = psuTier(pc, pw), rate = Math.round(pc.load / pw * 100);
+        if (t === 'low') add('bad', '파워 용량 부족', `예상 최대 소비 ${pc.load}W → 최소 ${mn.w}W 이상 필요 (파워 ${pw}W)`);
+        else if (t === 'min') add('warn', '파워 용량 여유가 적음', `예상 최대 소비 ${pc.load}W, 파워 ${pw}W (부하율 약 ${rate}%) → 사용은 가능하지만 권장 ${rc.w}W보다 작습니다.`);
+        else add('ok', `파워 용량 ${t === 'sweet' ? '충분 · 스윗스팟' : '충분'} (예상 ${pc.load}W / ${pw}W, 부하율 약 ${rate}%)`);
       }
     }
     // 파워 케이블: 그래픽카드 전원
@@ -1628,7 +1689,7 @@ const PCC = (() => {
     for (const it of items) { try { fn[it.cat] && fn[it.cat](it); } catch (e) { it.deriveError = String(e); } }
   }
 
-  return { SHEET_ID, SUMMARY_TAB, PARTS, GPU_CHIP_ORDER, gpuChipRank, pkgSticks, sticksFor, FIELD_META, rankOf, ramCapView, coolerSocketOk, m2Heatsinks, laneClass, chipRank, LANE_ORDER, askSpec, averageScores, checkBuild, mbForm, isPkg, ramPack, PKG_STICKS, cpuSocket, radFits, psuEps, psuPcie, fetchAll, buildDb, search, parseCsv, num, matchText, matchLine, parseLine, looksLikePart, wordsToText };
+  return { SHEET_ID, SUMMARY_TAB, PARTS, GPU_CHIP_ORDER, gpuChipRank, pkgSticks, sticksFor, FIELD_META, rankOf, ramCapView, coolerSocketOk, m2Heatsinks, laneClass, chipRank, LANE_ORDER, askSpec, averageScores, checkBuild, psuCalc, psuTier, PSU_W, mbForm, isPkg, ramPack, PKG_STICKS, cpuSocket, radFits, psuEps, psuPcie, fetchAll, buildDb, search, parseCsv, num, matchText, matchLine, parseLine, looksLikePart, wordsToText };
 })();
 
 // ===== 화면 =====
@@ -1901,6 +1962,15 @@ const PCC = (() => {
     .compat .cd { font-size: 12px; color: #57606a; line-height: 1.45; }
     .compat details { margin-top: 4px; } .compat summary { cursor: pointer; font-size: 12px; color: #57606a; }
     .sum .avg { font-weight: 700; }
+    .sum.power { display: block; border-top: 1px solid #e5e7eb; }
+    .power details summary { cursor: pointer; font-size: 13px; } .power .pload { font-size: 18px; color: #24292f; }
+    .power .pline { display: grid; grid-template-columns: 72px 1fr auto; gap: 6px; font-size: 12px; padding: 2px 0 2px 14px; } .power .pline b { text-align: right; }
+    .power .ptiles { display: grid; gap: 6px; margin: 8px 0 6px; }
+    .power .ptile { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 6px 8px; text-align: center; }
+    .power .ptile.main { border: 2px solid #375623; } .power .pl { font-size: 12px; color: #57606a; } .power .pv { font-size: 20px; font-weight: 700; color: #375623; } .power .pd { font-size: 11px; color: #8b949e; }
+    .power .pnow { font-size: 13px; font-weight: 600; margin: 2px 0 6px; }
+    .power .popts { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 12px; margin-bottom: 4px; }
+    .power .popts input[type=number] { width: 48px; height: 26px; padding: 2px 4px; border: 1px solid #d0d7de; border-radius: 6px; text-align: right; } .power .popts label { display: inline-flex; align-items: center; gap: 4px; }
     .sum.scores { display: block; border-top: none; padding-bottom: 8px; } .scores .sgrid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     .scores .stile { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px 10px; text-align: center; }
     .scores .sl { font-size: 12px; color: #57606a; } .scores .sv b { font-size: 26px; color: #375623; line-height: 1.2; } .scores .sv span { font-size: 13px; color: #8b949e; }
@@ -2387,7 +2457,7 @@ const PCC = (() => {
     const diff = total - real, rate = total ? diff / total * 100 : 0;
     const date = (db.rules.priceDate || '').replace(/^.*?:\s*/, '');
     const avg = PCC.averageScores(checkRows());
-    const issues = PCC.checkBuild(checkRows()).filter(x => x.level !== 'ok');
+    const issues = PCC.checkBuild(checkRows(), { psu: build.psu }).filter(x => x.level !== 'ok');
     return { rows, parts, asm, total, sale, disc, real, diff, rate, date, avg, issues, version: db.rules.version.replace(/^.*?:\s*/, ''), missing: rows.filter(r => r.price == null).length };
   }
   const priceText = p => p == null ? '판매 정보 없음' : won(p);
@@ -3233,7 +3303,7 @@ const PCC = (() => {
     const missing = rows.filter(r => rowPrice(r) == null).length;
     const sale = numOf(b.sale), disc = numOf(b.discount), real = Math.max(0, sale - disc);
     const cr = rows.map(r => ({ it: byKey.get(r.key), count: r.count || 1, opt: r.opt }));
-    const checks = PCC.checkBuild(cr);
+    const checks = PCC.checkBuild(cr, { psu: b.psu });
     return { rows, parts, asm, total, missing, sale, disc, real, diff: sale ? total - real : null, avg: PCC.averageScores(cr),
       bad: checks.filter(x => x.level === 'bad').length, warn: checks.filter(x => x.level === 'warn').length, checks };
   }
@@ -3245,7 +3315,7 @@ const PCC = (() => {
   }
   function saveCurrent(asNew) {
     const list = loadSaved();
-    const snap = JSON.parse(JSON.stringify({ rows: build.rows, misses: build.misses, text: build.text, sale: build.sale, discount: build.discount, asm: asmOn(build), asmOs: !!build.asmOs, asmCustom: build.asmCustom ?? null }));
+    const snap = JSON.parse(JSON.stringify({ rows: build.rows, misses: build.misses, text: build.text, sale: build.sale, discount: build.discount, asm: asmOn(build), asmOs: !!build.asmOs, asmCustom: build.asmCustom ?? null, psu: build.psu || null }));
     const total = buildStats(build).total;
     const old = !asNew && build.savedId && list.find(s => s.id === build.savedId);
     if (old) {
@@ -3444,6 +3514,7 @@ const PCC = (() => {
       el('button', { class: 'btn ghost sm', text: '검색', onclick: () => { state.mode = 'search'; state.query = PCC.parseLine(line).text; render(); if (searchInput) { searchInput.value = state.query; renderSearchResults(); } } }),
       el('button', { class: 'x', title: '지우기', text: '×', onclick: () => { build.misses.splice(idx, 1); saveBuild(); render(); } }))));
     const sc = renderScore(); if (sc) body.append(sc);   // 평균 점수를 호환성 검사 위에 크게
+    const pwr = renderPower(); if (pwr) body.append(pwr);   // 파워 계산기
     body.append(renderCompat());
     body.append(renderSum());
     const scoreChk = el('input', { type: 'checkbox' }); scoreChk.checked = GM_getValue('pcc_export_eval', true) !== false;
@@ -3553,8 +3624,52 @@ const PCC = (() => {
       el('div', { class: 'hint', style: 'margin-top:4px;text-align:center', text: '케이스를 뺀 부품의 평균 점수' }));
   }
 
+  // 파워 계산기: 예상 최대 소비 전력 + 세 단계 용량(사용 가능·권장·스윗스팟) + 담은 파워 판정
+  function renderPower() {
+    const po = build.psu = build.psu || { fans: 0, hdd: 0, gpuMax: false };
+    const rows = checkRows(), pc = PCC.psuCalc(rows, po);
+    if (!pc.ready) return null;
+    const psuR = rows.find(r => r.it.cat === '파워서플라이');
+    const pw = psuR ? (Number((psuR.it.name.match(/(\d{3,4})\s*W/i) || [])[1]) || null) : null;
+    const t = PCC.psuTier(pc, pw);
+    const [mn, rc, sw] = pc.tiers;
+    const box = el('div', { class: 'sum power' }, el('div', { class: 'sec', style: 'margin-top:0', text: '파워 계산' }));
+    const det = el('details', {}, el('summary', {}, '예상 최대 소비 전력 ', el('b', { class: 'pload', text: pc.load + 'W' }), el('span', { class: 'muted', text: ' (부품별 내역)' })));
+    pc.parts.forEach(([n, w, d]) => det.append(el('div', { class: 'pline' }, el('span', { text: n }), el('span', { class: 'muted', text: d }), el('b', { text: w + 'W' }))));
+    box.append(det);
+    const tile = (label, tr, extra) => el('div', { class: 'ptile' + (tr.key === 'rec' ? ' main' : '') },
+      el('div', { class: 'pl', text: label }), el('div', { class: 'pv', text: tr.w + 'W' }), el('div', { class: 'pd', text: extra }));
+    const tiles = [tile('사용 가능', mn, `+${mn.pct}% · 여유 적음`)];
+    if (pc.merged) tiles.push(tile('권장 · 스윗스팟', rc, `+${rc.pct}% 이상 · 효율 최고 구간`));
+    else tiles.push(tile('권장', rc, `+${rc.pct}% · 순간 피크까지`), tile('스윗스팟', sw, `+${sw.pct}% · 효율 최고 구간`));
+    box.append(el('div', { class: 'ptiles', style: `grid-template-columns:repeat(${tiles.length},1fr)` }, tiles));
+    if (pw) {
+      const rate = Math.round(pc.load / pw * 100);
+      const msg = { low: ['bad', `담은 파워 ${pw}W → 용량 부족 (사용 가능 ${mn.w}W 이상 필요)`], min: ['warnc', `담은 파워 ${pw}W → 사용 가능 (부하율 약 ${rate}%, 권장 ${rc.w}W보다 작음)`],
+        rec: ['good', `담은 파워 ${pw}W → 권장 이상 (부하율 약 ${rate}%)`], sweet: ['good', `담은 파워 ${pw}W → 스윗스팟 (부하율 약 ${rate}%, 효율이 가장 좋은 구간)`] }[t];
+      box.append(el('div', { class: 'pnow ' + msg[0], text: msg[1] }));
+    }
+    // 옵션: 추가 팬, HDD, 그래픽카드 최대 제한 전력
+    const num = (key, min) => {
+      const i = el('input', { type: 'number', step: '1', min: String(min), max: '20', value: String(po[key] || 0) });
+      i.addEventListener('change', () => { po[key] = Math.max(min, Math.min(20, Math.round(Number(i.value) || 0))); saveBuild(); render(); });
+      return i;
+    };
+    const caseR = rows.find(r => r.it.cat === '케이스');
+    const caseFans = caseR ? ((spec(caseR.it, '기본 제공 팬').match(/\*\s*\d+/g) || []).reduce((a, x) => a + Number(x.replace(/\D/g, '')), 0)) : 0;
+    const gChk = el('input', { type: 'checkbox' }); gChk.checked = !!po.gpuMax;
+    gChk.addEventListener('change', () => { po.gpuMax = gChk.checked; saveBuild(); render(); });
+    box.append(el('div', { class: 'popts' },
+      el('label', {}, '추가 팬 ', num('fans', -caseFans), '개'),
+      el('label', {}, 'HDD ', num('hdd', 0), '개'),
+      el('label', {}, gChk, ' 그래픽카드 최대 제한 전력 기준')));
+    box.append(el('div', { class: 'hint', text: `팬갈이를 하면 추가 팬 수 = 총 장착할 팬 개수 − 케이스 기본 팬 개수(${caseFans}개)로 넣어 주세요. 기본 팬을 떼면 음수도 됩니다.` }),
+      el('div', { class: 'hint', text: '팬 미포함 수랭 쿨러는 라디에이터 크기만큼 팬을 단 기준(360 → 3개)으로 셉니다.' }));
+    return box;
+  }
+
   function renderCompat() {
-    const res = PCC.checkBuild(checkRows());
+    const res = PCC.checkBuild(checkRows(), { psu: build.psu });
     const box = el('div', { class: 'sum compat' }, el('div', { class: 'sec', style: 'margin-top:0', text: '호환성 검사' }));
     if (!res.length) { box.append(el('div', { class: 'hint', text: '검사할 수 있는 부품 조합이 아직 없습니다. (CPU·메인보드·케이스·파워 등을 담으면 검사합니다)' })); return box; }
     const item = x => el('div', { class: 'ci ' + x.level },
