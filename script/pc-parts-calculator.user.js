@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         완본체 부품 계산기
 // @namespace    https://docs.google.com/spreadsheets/d/1BzS5KSx11k-oaLxc37x33lahjWviZfCqObnbBw54D0I
-// @version      0.20.4
+// @version      0.20.5
 // @description  완본체 판매 페이지의 사양표를 OCR로 읽어 '완본체 부품리스트&계산기' 시트에서 부품 스펙과 다나와 최저가를 찾아 견적표로 만들어 줍니다.
 // @license      MIT
 // @match        *://*/*
@@ -1804,6 +1804,32 @@ const PCC = (() => {
   // 스크립트 패치노트: 1.0 배포부터 기록 (판올림할 때 맨 위에 ['버전', '추가|수정|삭제', '내용'] 추가)
   const SCRIPT_NOTES = [
   ].map(([ver, kind, text]) => ({ ver: 'v' + ver, date: '', kind, text }));
+  // 설정 (Tampermonkey 메뉴 없이도 쓸 수 있게 패널 안에서): 화면 버튼, 버튼 위치, 단축키
+  function openSettings() {
+    const old = root.querySelector('.notes-modal'); if (old) old.remove();
+    const close = () => m.remove();
+    const fabChk = el('input', { type: 'checkbox' }); fabChk.checked = !!GM_getValue(FAB_KEY, fabDefault());
+    if (!canHideFab()) { fabChk.checked = true; fabChk.disabled = true; }
+    fabChk.addEventListener('change', () => { GM_setValue(FAB_KEY, fabChk.checked); applyFab(); showToast(fabChk.checked ? '화면 버튼을 켰습니다.' : `화면 버튼을 숨겼습니다. ${comboText(getShortcut())}${HAS_MENU ? ' 또는 Tampermonkey 메뉴' : ''}로 열 수 있습니다.`, 2500); });
+    const keyText = el('b', { text: comboText(getShortcut()) });
+    const row = (label, ...kids) => el('div', { class: 'set-row' }, el('div', { class: 'set-l', text: label }), el('div', { class: 'set-v' }, ...kids));
+    const m = el('div', { class: 'notes-modal', onclick: e => { if (e.target === m) close(); } },
+      el('div', { class: 'notes-box' },
+        el('div', { class: 'notes-hd' }, el('b', { text: '설정' }), el('button', { class: 'x', text: '×', title: '닫기', onclick: close })),
+        el('div', { class: 'notes-list' },
+          row('화면 버튼', el('label', { class: 'set-chk' }, fabChk, ' 화면에 "완본체 계산기" 버튼 보이기'),
+            el('div', { class: 'hint', text: canHideFab() ? '숨기면 단축키나 Tampermonkey 메뉴로만 열 수 있습니다.' : '휴대폰이나 AdGuard처럼 메뉴가 없는 환경에서는 패널을 열 방법이 없어지므로 숨길 수 없습니다.' })),
+          row('버튼 위치', el('button', { class: 'btn ghost sm', text: '처음 위치로', onclick: () => { GM_setValue(FABPOS_KEY, null); placeFab(); showToast('화면 버튼을 오른쪽 아래로 옮겼습니다.', 1500); } }),
+            el('div', { class: 'hint', text: '버튼은 끌어서 옮길 수 있고, 옮긴 위치를 기억합니다.' })),
+          isTouch ? null : row('단축키', el('span', {}, '지금: ', keyText, ' '),
+            el('button', { class: 'btn ghost sm', text: '바꾸기', onclick: () => { capturing = true; showToast('원하는 단축키를 누르세요. 지금: ' + comboText(getShortcut()) + ' (취소: Esc)'); const t = setInterval(() => { if (!capturing) { clearInterval(t); keyText.textContent = comboText(getShortcut()); } }, 300); } }),
+            el('div', { class: 'hint', text: '아무 페이지에서나 이 단축키로 패널을 열고 닫습니다. 다른 기능과 겹치면 바꿔 주세요. (웨일은 Alt+Shift+P가 겹칩니다)' })),
+          row('데이터', el('button', { class: 'btn ghost sm', text: '새로고침', onclick: () => { close(); if (!state.loading) loadData(true); } }),
+            el('div', { class: 'hint', text: '최신 부품 데이터와 가격을 다시 받습니다.' }))),
+        el('div', { class: 'btnrow', style: 'justify-content:flex-end' }, el('button', { class: 'btn sm', text: '확인', onclick: close }))));
+    panel.append(m);
+  }
+
   // 패치노트 팝업: [데이터] [스크립트] 탭, 데이터가 항상 맨 앞·기본
   function openNotesModal(dataList, title) {
     const old = root.querySelector('.notes-modal'); if (old) old.remove();
@@ -2009,6 +2035,7 @@ const PCC = (() => {
     .notes-modal { position: absolute; inset: 0; z-index: 50; background: rgba(15,18,22,.45); display: flex; align-items: center; justify-content: center; padding: 16px; }
     .notes-box { background: #fff; border-radius: 10px; width: 100%; max-width: 520px; max-height: 80%; display: flex; flex-direction: column; box-shadow: 0 8px 28px rgba(0,0,0,.25); padding: 12px 14px; }
     .notes-hd { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; } .notes-hd .x { border: none; background: none; font-size: 18px; cursor: pointer; color: #8b949e; }
+    .set-row { display: grid; grid-template-columns: 72px 1fr; gap: 8px; padding: 10px 0; border-bottom: 1px solid #eef0f2; } .set-l { font-weight: 700; padding-top: 3px; } .set-v { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; } .set-chk { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
     .notes-tabs { display: flex; gap: 4px; margin-bottom: 8px; border-bottom: 1px solid #eef0f2; }
     .notes-tab { border: none; background: none; padding: 5px 12px; font-size: 13px; color: #57606a; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
     .notes-tab.on { color: #375623; font-weight: 700; border-bottom-color: #375623; }
@@ -2048,7 +2075,7 @@ const PCC = (() => {
   <button class="fab" title="완본체 계산기 열기" hidden>완본체 계산기</button>
   <div class="panel" hidden>
     <header>
-      <div class="row"><h1>완본체 부품 계산기</h1><button data-act="sheet" title="원본 구글 시트 열기">원본 시트</button><button data-act="notes" title="데이터·스크립트 패치노트">패치노트</button><button data-act="refresh">새로고침</button><button data-act="close">닫기</button></div>
+      <div class="row"><h1>완본체 부품 계산기</h1><button data-act="sheet" title="원본 구글 시트 열기">원본 시트</button><button data-act="notes" title="데이터·스크립트 패치노트">패치노트</button><button data-act="settings" title="화면 버튼·단축키 설정">설정</button><button data-act="refresh">새로고침</button><button data-act="close">닫기</button></div>
       <div class="meta"></div>
       <div class="tabs"><button data-mode="build">계산기</button><button data-mode="power">파워 계산</button><button data-mode="saved">저장한 견적</button><button data-mode="search">부품 검색</button><button data-mode="parts">부품 비교</button></div>
     </header>
@@ -2774,9 +2801,11 @@ const PCC = (() => {
   }
 
   // ----- 패널 열기/닫기, 단축키 -----
-  // 화면 버튼 기본값: 휴대폰(터치)이거나 메뉴 명령을 못 쓰는 환경(AdGuard 등)이면 켬
+  // 화면 버튼은 기본으로 켬 (설정은 패널의 '설정'에서. Tampermonkey 메뉴는 있으면 덤으로)
   const HAS_MENU = typeof GM_registerMenuCommand === 'function';
-  const fabDefault = () => !HAS_MENU || (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+  const fabDefault = () => true;
+  // 화면 버튼을 숨겨도 되는 환경: 메뉴가 있고 휴대폰이 아님 (숨기면 단축키·메뉴로만 열 수 있음)
+  const canHideFab = () => HAS_MENU && !(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
   const applyFab = () => { fab.hidden = !panel.hidden || !GM_getValue(FAB_KEY, fabDefault()); if (!fab.hidden && typeof placeFab === 'function') placeFab(); };
   function openPanel() { panel.hidden = false; applyFab(); if (!state.loading) loadData(false); else render(); }
   function closePanel() { panel.hidden = true; applyFab(); }
@@ -2839,6 +2868,7 @@ const PCC = (() => {
     if (t.dataset.act === 'close') closePanel();
     else if (t.dataset.act === 'refresh') { if (!state.loading) loadData(true); }
     else if (t.dataset.act === 'notes') showNotes(false);
+    else if (t.dataset.act === 'settings') openSettings();
     else if (t.dataset.act === 'sheet') window.open('https://docs.google.com/spreadsheets/d/' + PCC.SHEET_ID + '/edit', '_blank', 'noopener');
     else if (t.dataset.act === 'back') { state.selected = null; render(); }
     else if (t.dataset.mode) { state.mode = t.dataset.mode; state.selected = null; state.specView = false; render(); }
