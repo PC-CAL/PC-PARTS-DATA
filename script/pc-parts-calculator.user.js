@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         완본체 부품 계산기
 // @namespace    https://docs.google.com/spreadsheets/d/1BzS5KSx11k-oaLxc37x33lahjWviZfCqObnbBw54D0I
-// @version      0.20.7
+// @version      0.20.9
 // @description  완본체 판매 페이지의 사양표를 OCR로 읽어 '완본체 부품리스트&계산기' 시트에서 부품 스펙과 다나와 최저가를 찾아 견적표로 만들어 줍니다.
 // @license      MIT
 // @match        *://*/*
@@ -653,11 +653,11 @@ const PCC = (() => {
 
   // ===== 파워 계산기 =====
   // 예상 최대 소비 전력(부하)을 부품별로 더하고, 마진(%)을 붙여 세 단계 용량을 냄
-  //   사용 가능 +15% (부하율 약 87%) / 권장 +50% (약 67%) / 스윗스팟 +80% (약 55%, 효율이 가장 높은 50~60% 구간의 가운데)
+  //   사용 가능 +15% (부하율 약 87%) / 권장 +50% (약 67%) / 스윗스팟: 부하율 70% 이하가 되는 가장 작은 용량 (좋은 파워는 20~70%에서 효율 차이가 1%p 안쪽)
   //   용량은 실제 파워 용량 단위로 올림. 권장과 스윗스팟이 같은 용량이면 합침
   // opt: { fans: 추가 팬 수(팬갈이면 총 장착 팬 − 케이스 기본 팬, 음수 가능), hdd: HDD 수, gpuMax: 그래픽카드 최대 제한 전력 기준 }
   const PSU_W = { fan: 8, pump: 10, hdd: 10, nvme: 10, sata: 5, ram: 5, ramRgb: 7, mbHigh: 45, mbLow: 30, etc: 15 };
-  const PSU_TIERS = [['min', '사용 가능', 15], ['rec', '권장', 50], ['sweet', '스윗스팟', 80]];
+  const PSU_TIERS = [['min', '사용 가능', 15], ['rec', '권장', 50], ['sweet', '스윗스팟', 100 / 0.7 - 100]];   // 스윗스팟 = 부하 ÷ 0.7
   // 그래픽카드 칩셋 제조사(NVIDIA·AMD) 공식 권장 파워 (Required System Power). 긴 이름부터 맞춤
   //   RTX 50: 5090 1000W, 5080 850W, 5070 Ti 750W, 5070 650W, 5060 Ti 600W, 5060·5050 550W
   //   RX 9000: 9070 XT 750W, 9070 650W, 9060 XT 450W / 9070 GRE·9060은 공식 값을 못 찾아 같은 전력대 기준 추정(est)
@@ -720,6 +720,7 @@ const PCC = (() => {
       Object.assign(tiers[1], { w, need: w, vendor: vr, raised: w > vr.w });
       if (tiers[2].w < w) tiers[2].w = tiers[2].need = w;
     }
+    if (tiers[2].w < tiers[1].w) { tiers[2].w = tiers[1].w; tiers[2].need = tiers[1].need; }   // 스윗스팟이 권장보다 작으면 권장과 합침
     const merged = tiers[1].w === tiers[2].w;   // 권장 = 스윗스팟이면 한 줄로
     return { load, parts, tiers, merged, vendor: vr, ready: !!(cpuR || gpuR) };
   }
@@ -3736,14 +3737,14 @@ const PCC = (() => {
     const v = rc.vendor;   // 그래픽카드 칩셋 제조사 공식 권장
     const recDesc = v ? (rc.raised ? `${v.maker} 권장 ${v.w}W보다 부하가 커서 올림` : `${v.maker} 공식 권장${v.est ? ' (추정)' : ''}`) : `+${rc.pct}% · 순간 피크까지`;
     const tiles = [tile('사용 가능', mn, `+${mn.pct}% · 여유 적음`)];
-    if (pc.merged) tiles.push(tile('권장 · 스윗스팟', rc, `${v ? recDesc : '+' + rc.pct + '% 이상'} · 효율 최고 구간`));
-    else tiles.push(tile('권장', rc, recDesc), tile('스윗스팟', sw, `+${sw.pct}% · 효율 최고 구간`));
+    if (pc.merged) tiles.push(tile('권장 · 스윗스팟', rc, `${v ? recDesc : '+' + rc.pct + '% 이상'} · 효율 좋은 구간`));
+    else tiles.push(tile('권장', rc, recDesc), tile('스윗스팟', sw, '부하율 70% 이하 · 효율 좋은 구간'));
     box.append(el('div', { class: 'ptiles', style: `grid-template-columns:repeat(${tiles.length},1fr)` }, tiles));
     if (v) box.append(el('div', { class: 'hint', text: `권장 용량은 ${v.maker}가 발표한 ${v.maker === 'NVIDIA' ? 'RTX ' + v.chip : v.chip} 권장 파워(${v.w}W)를 기준으로 합니다${v.est ? ' (공식 값을 찾지 못해 같은 전력대 기준으로 추정)' : ''}. 그래픽카드 제품마다(오버클럭 모델 등) 더 높게 권장하기도 하니 제품 페이지도 확인해 주세요.` }));
     if (pw) {
       const rate = Math.round(pc.load / pw * 100);
       const msg = { low: ['bad', `담은 파워 ${pw}W → 용량 부족 (사용 가능 ${mn.w}W 이상 필요)`], min: ['warnc', `담은 파워 ${pw}W → 사용 가능 (부하율 약 ${rate}%, 권장 ${rc.w}W보다 작음)`],
-        rec: ['good', `담은 파워 ${pw}W → 권장 이상 (부하율 약 ${rate}%)`], sweet: ['good', `담은 파워 ${pw}W → 스윗스팟 (부하율 약 ${rate}%, 효율이 가장 좋은 구간)`] }[t];
+        rec: ['good', `담은 파워 ${pw}W → 권장 이상 (부하율 약 ${rate}%)`], sweet: ['good', `담은 파워 ${pw}W → 스윗스팟 (부하율 약 ${rate}%, 효율이 좋은 구간)`] }[t];
       box.append(el('div', { class: 'pnow ' + msg[0], text: msg[1] }));
     }
     // 옵션: 추가 팬, HDD, 그래픽카드 최대 제한 전력
