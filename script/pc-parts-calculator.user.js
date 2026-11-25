@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         완본체 부품 계산기
 // @namespace    https://docs.google.com/spreadsheets/d/1BzS5KSx11k-oaLxc37x33lahjWviZfCqObnbBw54D0I
-// @version      0.21.1
+// @version      0.21.2
 // @description  완본체 판매 페이지의 사양표를 OCR로 읽어 '완본체 부품리스트&계산기' 시트에서 부품 스펙과 다나와 최저가를 찾아 견적표로 만들어 줍니다.
 // @license      MIT
 // @match        *://*/*
@@ -12,12 +12,64 @@
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
 // @grant        GM_setClipboard
+// @grant        GM.getValue
+// @grant        GM.setValue
+// @grant        GM.listValues
+// @grant        GM.xmlHttpRequest
+// @grant        GM.setClipboard
+// @grant        GM.info
 // @connect      pc-cal.github.io
 // @connect      docs.google.com
 // @connect      googleusercontent.com
 // @connect      *
 // @run-at       document-idle
 // ==/UserScript==
+
+// ===== 호환층: iOS Safari 'Userscripts' 앱처럼 GM.*(비동기)만 있는 환경에서도 동작 =====
+// Tampermonkey·AdGuard처럼 GM_* 가 있으면 그대로 쓰고, 없으면 시작할 때 저장값을 한 번에 읽어 두고(메모리) 저장은 GM.setValue로 함
+const __pccGM = (() => {
+  const g = typeof GM !== 'undefined' ? GM : {};
+  const old = {
+    get: typeof GM_getValue === 'function' ? GM_getValue : null,
+    set: typeof GM_setValue === 'function' ? GM_setValue : null,
+    xhr: typeof GM_xmlhttpRequest === 'function' ? GM_xmlhttpRequest : null,
+    clip: typeof GM_setClipboard === 'function' ? GM_setClipboard : null,
+    menu: typeof GM_registerMenuCommand === 'function' ? GM_registerMenuCommand : null,
+    info: typeof GM_info !== 'undefined' ? GM_info : (g.info || undefined)
+  };
+  const KNOWN = ['pcc_build_v1', 'pcc_cache_v1', 'pcc_partial_v1', 'pcc_saved_v1', 'pcc_partcmp_v1', 'pcc_show_fab', 'pcc_fab_pos', 'pcc_shortcut', 'pcc_notes_seen_v1', 'pcc_asm_default', 'pcc_export_eval'];
+  const cache = {};
+  const ls = { get: (k, d) => { try { const v = localStorage.getItem('pcc:' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set: (k, v) => { try { localStorage.setItem('pcc:' + k, JSON.stringify(v)); } catch (e) {} } };
+  const ready = (async () => {
+    if (old.get || typeof g.getValue !== 'function') return;
+    let keys = [];
+    try { keys = typeof g.listValues === 'function' ? await g.listValues() : []; } catch (e) {}
+    keys = [...new Set([...(keys || []), ...KNOWN])];
+    await Promise.all(keys.map(async k => { try { const v = await g.getValue(k); if (v !== undefined) cache[k] = v; } catch (e) {} }));
+  })();
+  const hasNew = typeof g.getValue === 'function';
+  return {
+    ready,
+    getValue: old.get || ((k, d) => hasNew ? (k in cache ? cache[k] : d) : ls.get(k, d)),
+    setValue: old.set || ((k, v) => { if (hasNew) { cache[k] = v; try { g.setValue(k, v); } catch (e) {} } else ls.set(k, v); }),
+    xhr: old.xhr || (typeof g.xmlHttpRequest === 'function' ? (d => g.xmlHttpRequest(d)) : (d => {   // 둘 다 없으면 fetch (같은 출처·CORS 허용 주소만)
+      fetch(d.url, { method: d.method || 'GET' }).then(async r => {
+        const resp = d.responseType === 'blob' ? await r.blob() : await r.text();
+        d.onload && d.onload({ status: r.status, response: resp, responseText: typeof resp === 'string' ? resp : '' });
+      }).catch(e => d.onerror && d.onerror(e));
+    })),
+    clip: old.clip || (typeof g.setClipboard === 'function' ? ((t, type) => g.setClipboard(t, type)) : (t => { try { navigator.clipboard.writeText(String(t)); } catch (e) {} })),
+    menu: old.menu,
+    info: old.info
+  };
+})();
+
+(async () => {
+await __pccGM.ready;
+const GM_getValue = __pccGM.getValue, GM_setValue = __pccGM.setValue, GM_xmlhttpRequest = __pccGM.xhr,
+  GM_setClipboard = __pccGM.clip, GM_registerMenuCommand = __pccGM.menu, GM_info = __pccGM.info;
+
 
 // ===== 핵심 로직: 데이터 읽기, 가격 연결, 검색 =====
 const PCC = (() => {
@@ -3957,4 +4009,5 @@ const PCC = (() => {
     GM_registerMenuCommand('화면 버튼 보이기/숨기기', () => { GM_setValue(FAB_KEY, !GM_getValue(FAB_KEY, fabDefault())); applyFab(); });
     GM_registerMenuCommand('화면 버튼 위치 초기화', () => { GM_setValue(FABPOS_KEY, null); placeFab(); });
   }
+})();
 })();
