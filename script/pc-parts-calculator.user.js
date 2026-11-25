@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         완본체 부품 계산기
 // @namespace    https://docs.google.com/spreadsheets/d/1BzS5KSx11k-oaLxc37x33lahjWviZfCqObnbBw54D0I
-// @version      0.20.0
+// @version      0.20.1
 // @description  완본체 판매 페이지의 사양표를 OCR로 읽어 '완본체 부품리스트&계산기' 시트에서 부품 스펙과 다나와 최저가를 찾아 견적표로 만들어 줍니다.
 // @license      MIT
 // @match        *://*/*
@@ -1962,6 +1962,7 @@ const PCC = (() => {
     .compat .cd { font-size: 12px; color: #57606a; line-height: 1.45; }
     .compat details { margin-top: 4px; } .compat summary { cursor: pointer; font-size: 12px; color: #57606a; }
     .sum .avg { font-weight: 700; }
+    .sum.pline1 { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; border-top: 1px solid #e5e7eb; padding: 8px 12px; } .sum.pline1:hover { background: #eef6ea; } .pline1 .plink { color: #0969da; font-size: 12px; flex: none; }
     .sum.power { display: block; border-top: 1px solid #e5e7eb; }
     .power details summary { cursor: pointer; font-size: 13px; } .power .pload { font-size: 18px; color: #24292f; }
     .power .pline { display: grid; grid-template-columns: 72px 1fr auto; gap: 6px; font-size: 12px; padding: 2px 0 2px 14px; } .power .pline b { text-align: right; }
@@ -2040,7 +2041,7 @@ const PCC = (() => {
     <header>
       <div class="row"><h1>완본체 부품 계산기</h1><button data-act="sheet" title="원본 구글 시트 열기">원본 시트</button><button data-act="notes" title="데이터·스크립트 패치노트">패치노트</button><button data-act="refresh">새로고침</button><button data-act="close">닫기</button></div>
       <div class="meta"></div>
-      <div class="tabs"><button data-mode="build">계산기</button><button data-mode="search">부품 검색</button><button data-mode="parts">부품 비교</button><button data-mode="saved">저장한 견적</button></div>
+      <div class="tabs"><button data-mode="build">계산기</button><button data-mode="power">파워 계산</button><button data-mode="saved">저장한 견적</button><button data-mode="search">부품 검색</button><button data-mode="parts">부품 비교</button></div>
     </header>
     <div class="controls"></div>
     <div class="body"></div>
@@ -2850,6 +2851,7 @@ const PCC = (() => {
     if (!db) { controls.replaceChildren(); return; }
     if (state.selected) { controls.replaceChildren(); body.append(renderDetail(state.selected)); return; }
     if (state.mode === 'build') { if (state.specView) renderBuildSpecs(); else renderBuild(); }
+    else if (state.mode === 'power') renderPowerTab();
     else if (state.mode === 'saved') renderSaved(); else if (state.mode === 'parts') renderParts(); else renderSearch();
   }
 
@@ -3514,7 +3516,7 @@ const PCC = (() => {
       el('button', { class: 'btn ghost sm', text: '검색', onclick: () => { state.mode = 'search'; state.query = PCC.parseLine(line).text; render(); if (searchInput) { searchInput.value = state.query; renderSearchResults(); } } }),
       el('button', { class: 'x', title: '지우기', text: '×', onclick: () => { build.misses.splice(idx, 1); saveBuild(); render(); } }))));
     const sc = renderScore(); if (sc) body.append(sc);   // 평균 점수를 호환성 검사 위에 크게
-    const pwr = renderPower(); if (pwr) body.append(pwr);   // 파워 계산기
+    const pq = renderPowerLine(); if (pq) body.append(pq);   // 파워 계산 한 줄 요약 (자세한 건 '파워 계산' 탭)
     body.append(renderCompat());
     body.append(renderSum());
     const scoreChk = el('input', { type: 'checkbox' }); scoreChk.checked = GM_getValue('pcc_export_eval', true) !== false;
@@ -3624,6 +3626,27 @@ const PCC = (() => {
       el('div', { class: 'hint', style: 'margin-top:4px;text-align:center', text: '케이스를 뺀 부품의 평균 점수' }));
   }
 
+  // '파워 계산' 탭: 계산기 탭의 견적으로 계산
+  function renderPowerTab() {
+    controls.replaceChildren(el('div', { class: 'hint', text: '계산기 탭에 담은 견적으로 예상 소비 전력과 파워 용량을 계산합니다. 팬·HDD를 더 달 계획이면 아래 옵션에 넣어 주세요.' }));
+    const p = renderPower();
+    if (p) { body.append(p); return; }
+    body.append(el('div', { class: 'msg', text: '견적에 CPU나 그래픽카드가 없습니다. 계산기 탭에서 견적을 먼저 만들어 주세요.' }),
+      el('div', { class: 'btnrow', style: 'justify-content:center;margin-top:8px' }, el('button', { class: 'btn sm', text: '계산기로 가기', onclick: () => { state.mode = 'build'; render(); } })));
+  }
+  // 계산기 탭의 한 줄 요약: 예상 소비 전력 · 권장 용량 · 담은 파워 판정 → 누르면 파워 계산 탭
+  function renderPowerLine() {
+    const rows = checkRows(), pc = PCC.psuCalc(rows, build.psu || {});
+    if (!pc.ready) return null;
+    const psuR = rows.find(r => r.it.cat === '파워서플라이');
+    const pw = psuR ? (Number((psuR.it.name.match(/(\d{3,4})\s*W/i) || [])[1]) || null) : null;
+    const t = PCC.psuTier(pc, pw), rc = pc.tiers[1];
+    const judge = t ? { low: ['bad', '부족'], min: ['warnc', '여유 적음'], rec: ['good', '권장 이상'], sweet: ['good', '스윗스팟'] }[t] : null;
+    return el('div', { class: 'sum pline1', title: '눌러서 파워 계산 탭 열기', onclick: () => { state.mode = 'power'; render(); } },
+      el('span', {}, '파워 계산: 예상 ', el('b', { text: pc.load + 'W' }), ' · 권장 ', el('b', { text: rc.w + 'W' }),
+        judge ? el('span', {}, ' · 담은 파워 ', el('b', { class: judge[0], text: `${pw}W ${judge[1]}` })) : ''),
+      el('span', { class: 'plink', text: '자세히 →' }));
+  }
   // 파워 계산기: 예상 최대 소비 전력 + 세 단계 용량(사용 가능·권장·스윗스팟) + 담은 파워 판정
   function renderPower() {
     const po = build.psu = build.psu || { fans: 0, hdd: 0, gpuMax: false };
