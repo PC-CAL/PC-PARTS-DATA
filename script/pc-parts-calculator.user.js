@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         완본체 부품 계산기
 // @namespace    https://docs.google.com/spreadsheets/d/1BzS5KSx11k-oaLxc37x33lahjWviZfCqObnbBw54D0I
-// @version      0.21.2
+// @version      0.21.5
 // @description  완본체 판매 페이지의 사양표를 OCR로 읽어 '완본체 부품리스트&계산기' 시트에서 부품 스펙과 다나와 최저가를 찾아 견적표로 만들어 줍니다.
 // @license      MIT
 // @match        *://*/*
@@ -69,7 +69,6 @@ const __pccGM = (() => {
 await __pccGM.ready;
 const GM_getValue = __pccGM.getValue, GM_setValue = __pccGM.setValue, GM_xmlhttpRequest = __pccGM.xhr,
   GM_setClipboard = __pccGM.clip, GM_registerMenuCommand = __pccGM.menu, GM_info = __pccGM.info;
-
 
 // ===== 핵심 로직: 데이터 읽기, 가격 연결, 검색 =====
 const PCC = (() => {
@@ -363,10 +362,19 @@ const PCC = (() => {
     return [];
   }
 
+  // 부품 검색: 띄어쓰기로 나눈 단어가 모두 들어간 제품
+  //   못 찾으면 → 색상·괄호·'국내 정품' 같은 부가 단어를 빼고 다시 → 그래도 없으면 계산기와 같은 방식(비슷한 이름)으로 후보
+  const SOFT_WORD = /^(블랙|black|화이트|white|실버|silver|그레이|gray|grey|핑크|pink|국내|정품|국내정품|벌크|bulk|정발|병행|멀티팩|박스|box|tray|신품|새제품)$/;
   function search(db, query, cat) {
-    const toks = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
+    const toks = String(query || '').toLowerCase().replace(/[\[\](){}]/g, ' ').split(/\s+/).filter(Boolean);
     if (!toks.length) return [];
-    return db.items.filter(it => (!cat || it.cat === cat) && toks.every(t => it.search.includes(t)));
+    const by = ts => db.items.filter(it => (!cat || it.cat === cat) && ts.every(t => it.search.includes(t)));
+    let r = by(toks);
+    if (r.length) return r;
+    const core = toks.filter(t => !SOFT_WORD.test(t));
+    if (core.length && core.length < toks.length) { r = by(core); if (r.length) return r; }
+    const m = matchLine(db, (cat ? cat + ' : ' : '') + toks.join(' '));
+    return (m.cands || []).filter(c => !cat || c.it.cat === cat).map(c => c.it);
   }
 
 
@@ -450,7 +458,8 @@ const PCC = (() => {
     'seasonic', 'superflower', 'thermalright', 'arctic', 'noctua', 'pccooler', 'id-cooling', 'bravotec', 'daven', '1stplayer', 'zotac', 'palit', 'galax', 'inno3d', 'sapphire',
     'powercolor', 'xfx', 'colorful', 'emtek', '이엠텍', 'teamgroup', 'g.skill', 'gskill', 'klevv', 'essencore', 'crucial', 'micron', 'kingston', 'adata', 'hiksemi', 'lexar', 'patriot', 'coolleo',
     '컴이지', '타무즈', '쿨러마스터', '리안리', '다크플래쉬', '에센코어', '써멀라이트', '브라보텍', '데이븐', '오쓰', '씨게이트', '키오시아', 'sk하이닉스', '하이닉스', '에이서', '기가바이트',
-    '아수스', '애즈락', '갤럭시', '조텍', '렉사', '커세어', '시소닉', '슈퍼플라워', '에너지옵티머스', 'apacer', 'agi', 'hyte', 'acer', 'msi', '엠에스아이']);
+    '아수스', '애즈락', '갤럭시', '조텍', '렉사', '커세어', '시소닉', '슈퍼플라워', '에너지옵티머스', 'apacer', 'agi', 'hyte', 'acer', 'msi', '엠에스아이',
+    '마이크론', '크루셜', '트랜센드', 'transcend', '팀그룹', '지스킬', '패트리어트', '킹스턴', '에이데이터', '아다타', '클레브', '실리콘파워', 'siliconpower', '이노3d', '이노', '팔릿', '사파이어', '파워컬러', '컬러풀', '에즈윈', '애즈윈', '녹투아', '아틱', '딥쿨', '앤텍', '써멀테이크', 'thermaltake', '프렉탈', 'fractal', '비쿰', '뷰직', '시소닉']);
   // 여러 제품에 흔히 들어가는 말 (이것만 맞아서는 제품으로 인정하지 않음)
   const GENERIC = new Set(['ryzen', 'radeon', 'geforce', 'rtx', 'gtx', '라이젠', '라데온', '지포스', 'core', 'ultra', 'series', 'gaming', 'argb', 'rgb', 'white', 'black',
     '화이트', '블랙', 'm.2', 'nvme', 'ddr5', 'ddr4', 'wifi', 'atx', 'oc', 'pro', 'plus', 'mesh', '강화유리', 'edition', 'cooler', 'master', 'gold', '80plus',
@@ -1004,6 +1013,9 @@ const PCC = (() => {
 
   // Y자 8핀 케이블을 써도 괜찮은 그래픽카드 최대 전력 (그래픽카드 8핀 개수별): 8핀 2개 카드는 약 220W, 3개 이상 카드는 약 360W까지
   const Y_CABLE_MAX_W = n8 => n8 <= 2 ? 220 : 360;
+  // SSD 자체 방열판: 이름(히트싱크·heatsink·방열판) 또는 시트 비고·가점·이슈의 '방열판 탑재/포함'
+  const ssdNotes = it => [it.note, it.plus, it.issue].filter(Boolean).join(' ');
+  const ssdHasHeatsink = it => /히트싱크|heatsink|방열판/i.test(it.name) || /방열판\s*(탑재|포함|있음|장착|사이즈)|히트싱크\s*(탑재|포함)/i.test(ssdNotes(it));
   function checkBuild(rows, opt) {
     const R = [];
     const add = (level, title, detail) => R.push({ level, title, detail: detail || '' });
@@ -1112,6 +1124,12 @@ const PCC = (() => {
           : add('ok', `램과 쿨러 간섭 없음 (램 ${rh}mm / 최대 ${mm(lim)}mm)`);
       }
     }
+    // 케이스 기본 팬이 MOLEX로 연결되는데 파워에 MOLEX 커넥터가 없는 경우
+    if (psu && cs && /MOLEX/i.test(spec(cs, '기본 제공 팬'))) {
+      const mx = spec(psu, 'MOLEX 커넥터'), n = Number((String(mx).match(/(\d+)/) || [])[1] || 0);
+      if (mx && !n) add('warn', '케이스 팬은 MOLEX 연결인데 파워에 MOLEX 커넥터가 없음', 'SATA → MOLEX 변환 젠더를 쓰거나, 팬을 메인보드 팬 헤더(4핀)에 연결할 수 있는지 확인해 주세요.');
+      else if (n) add('ok', `케이스 팬 MOLEX 연결 가능 (파워 MOLEX ${n}개)`);
+    }
     // 파워 용량 (파워 계산기: 부품별 예상 소비 전력 + 마진 %)
     if (psu) {
       const pw = psuWatt(psu);
@@ -1130,7 +1148,9 @@ const PCC = (() => {
       const need8 = Number((port.match(/8핀\s*(\d+)\s*개/) || [])[1] || 0);
       if (/12V-2x6|12VHPWR/i.test(port)) {
         const hw = Number((h.match(/(\d{3})\s*W/) || [])[1] || 0);
-        if (hw && /\d+\s*개/.test(h)) hw >= gw ? add('ok', `그래픽카드 12V-2x6 케이블 연결 가능 (파워 ${hw}W 케이블)`) : add('warn', '12V-2x6 케이블 용량이 그래픽카드보다 낮음', `케이블 ${hw}W, 그래픽카드 ${gw}W`);
+        const none = /없음|별매/.test(h);   // '없음'·'별매'만 케이블 없음 (비었거나 '?'면 모르는 것으로 봄)
+        if (hw && !none) hw >= gw ? add('ok', `그래픽카드 12V-2x6 케이블 연결 가능 (파워 ${hw}W 케이블)`) : add('warn', '12V-2x6 케이블 용량이 그래픽카드보다 낮음', `케이블 ${hw}W, 그래픽카드 ${gw}W`);
+        else if (!none) add('note', /\d+\s*개/.test(h) ? '파워에 12V-2x6 케이블 있음 (케이블 최대 출력 미상)' : '파워 12V-2x6 케이블 정보 미상', `시트에 ${/\d+\s*개/.test(h) ? '케이블 출력(W)' : '12V-2x6 케이블 정보'}이 확인되지 않았습니다. 케이블이 있는지, 그래픽카드 ${gw || '?'}W보다 낮지 않은지 제품 설명서를 확인해 주세요.`);
         else {
           const n8 = Math.max(2, Math.ceil(gw / 150));
           if (p8.known) p8.n >= n8 ? add('warn', '파워에 12V-2x6 케이블이 없음', `그래픽카드에 동봉된 변환 젠더(8핀 ${n8}개)로 연결해야 합니다. 파워 8핀 ${p8.n}개로 연결은 가능합니다.`)
@@ -1173,6 +1193,18 @@ const PCC = (() => {
       const sataPorts = Number(spec(mb, 'SATA')) || 0;
       if (m2 && m2Slots) m2 <= m2Slots ? add('ok', `M.2 SSD ${m2}개 장착 가능 (슬롯 ${m2Slots}개)`) : add('bad', 'M.2 슬롯 부족', `M.2 SSD ${m2}개, 메인보드 슬롯 ${m2Slots}개`);
       if (sata && sataPorts && sata > sataPorts) add('bad', 'SATA 포트 부족', `SATA SSD ${sata}개, 메인보드 ${sataPorts}개`);
+      // M.2 방열판: 방열판 없는 NVMe SSD가 메인보드 기본 방열판 수보다 많으면 사제 방열판 권장
+      const raw = spec(mb, 'M.2 방열판 여부');
+      if (raw && !/^\?$/.test(raw.trim())) {
+        const hs = /^(없음|x|-)$/i.test(raw.trim()) ? 0 : Number((spec(mb, 'M.2 방열판 슬롯 수').match(/(\d+)/) || [])[1] || 0);
+        const bare = rows.filter(r => r.it && r.it.cat === 'SSD' && /M\.2|NVMe/i.test(r.it.name) && !ssdHasHeatsink(r.it))
+          .reduce((a, r) => a + (r.count || 1), 0);
+        // SSD 자체 방열판이 큰 제품: 메인보드 M.2 방열판·그래픽카드와 간섭 확인
+        rows.filter(r => r.it && r.it.cat === 'SSD' && /방열판\s*사이즈|방열판.*호환성/.test(ssdNotes(r.it))).forEach(r =>
+          add('note', `${r.it.name}: 방열판이 커서 장착 확인 필요`, '자체 방열판이 큰 제품이라 메인보드 M.2 방열판을 떼야 하거나, 그래픽카드 등 주변 부품과 간섭될 수 있습니다. 장착할 슬롯 위치를 확인해 주세요.'));
+        if (bare && bare > hs) add('note', hs ? `M.2 기본 방열판 ${hs}개, 방열판 없는 NVMe SSD ${bare}개` : '메인보드에 M.2 기본 방열판 없음',
+          `방열판 없는 NVMe SSD ${bare - hs}개는 메인보드 방열판 없이 장착됩니다. 발열로 속도가 떨어질 수 있으니 사제 M.2 방열판 구매를 권장합니다.`);
+      }
     }
     // 케이스 전면 USB-C ↔ 메인보드 헤더
     if (cs && mb) {
@@ -1641,7 +1673,7 @@ const PCC = (() => {
       putAfter(it, 'PCIe 8핀 케이블', [['PCIe 8핀 커넥터 수', ind + y * 2 + '개'], ['PCIe 케이블 가닥 수', ind + y + '개']]);   // 가닥 = 독립 + Y자 (Y자 2개 = 2가닥)
     }
     const h6 = sv(it, '12V-2x6 케이블');
-    if (h6) { const c = /없음|별매/.test(h6) ? 0 : Number((h6.match(/(\d+)\s*개/) || [])[1] || 0), wt = (h6.match(/(\d+)\s*W/) || [])[1]; putAfter(it, '12V-2x6 케이블', [['12V-2x6 개수', c + '개'], ['12V-2x6 최대 W', c ? (wt ? wt + 'W' : '불명') : '']]); }
+    if (h6) { const no = /없음|별매/.test(h6), c = no ? 0 : Number((h6.match(/(\d+)\s*개/) || [])[1] || 0), wt = (h6.match(/(\d+)\s*W/) || [])[1]; putAfter(it, '12V-2x6 케이블', [['12V-2x6 개수', no ? '0개' : c ? c + '개' : '불명'], ['12V-2x6 최대 W', no ? '' : wt ? wt + 'W' : '불명']]); }
     const sata = sv(it, 'SATA 전원 커넥터'), molex = sv(it, 'MOLEX 커넥터');
     if (sata) putAfter(it, 'SATA 전원 커넥터', [['SATA 커넥터 수', ((sata.match(/^(\d+)/) || [])[1] || 0) + '개']]);
     if (molex) putAfter(it, 'MOLEX 커넥터', [['MOLEX 커넥터 수', ((molex.match(/^(\d+)/) || [])[1] || 0) + '개']]);
@@ -1744,9 +1776,15 @@ const PCC = (() => {
   function deriveCooler(it) {
     const cls = sv(it, '분류'), water = /수랭/.test(cls);
     const rs = Number((cls.match(/(\d{3})\s*mm/) || [])[1] || 0);
-    putAfter(it, '분류', [['쿨러 종류', water ? '수랭' : /공랭/.test(cls) ? '공랭' : ''], ['타워', /듀얼/.test(cls) ? '듀얼타워' : /싱글/.test(cls) ? '싱글타워' : ''], ['라디 크기', rs ? rs + 'mm' : ''], ['라디 계열', rs ? (RAD140.includes(rs) ? '140mm 계열' : '120mm 계열') : '']]);
-    const pr = sv(it, '펌프 RPM');
-    if (pr) putAfter(it, '펌프 RPM', water ? [['펌프 최대 RPM', (pr.match(/(\d+)\s*RPM/i) || [])[1] ? (pr.match(/(\d+)\s*RPM/i))[1] + 'RPM' : '']] : [['히트파이프 개수', sumCnt(pr, /mm\s*(\d+)\s*개/g) ? sumCnt(pr, /mm\s*(\d+)\s*개/g) + '개' : '']]);
+    const air = !water && /공랭/.test(cls);
+    // 공랭은 라디 항목, 수랭은 타워 항목을 넣지 않음 (상세 스펙에 '-'로 쓸데없이 나오지 않게)
+    putAfter(it, '분류', [['쿨러 종류', water ? '수랭' : air ? '공랭' : ''], water ? null : ['타워', /듀얼/.test(cls) ? '듀얼타워' : /싱글/.test(cls) ? '싱글타워' : ''],
+      air ? null : ['라디 크기', rs ? rs + 'mm' : ''], air ? null : ['라디 계열', rs ? (RAD140.includes(rs) ? '140mm 계열' : '120mm 계열') : '']]);
+    // 시트 '펌프 RPM' 칸은 공랭이면 히트파이프 정보 → 이름을 '히트파이프'로
+    if (air) for (const arr of [it.allSpecs, it.specs]) arr.forEach(x => { if (x[0] === '펌프 RPM') x[0] = '히트파이프'; });
+    if (air) for (const arr of [it.allSpecs, it.specs]) { const i = arr.findIndex(([h, v]) => h === '수랭 호스' && /해당\s*없음|^-?$/.test(String(v).trim())); if (i >= 0) arr.splice(i, 1); }
+    const pr = sv(it, air ? '히트파이프' : '펌프 RPM');
+    if (pr) putAfter(it, air ? '히트파이프' : '펌프 RPM', water ? [['펌프 최대 RPM', (pr.match(/(\d+)\s*RPM/i) || [])[1] ? (pr.match(/(\d+)\s*RPM/i))[1] + 'RPM' : '']] : [['히트파이프 개수', sumCnt(pr, /mm\s*(\d+)\s*개/g) ? sumCnt(pr, /mm\s*(\d+)\s*개/g) + '개' : '']]);
     const fs = sv(it, '팬 사양');
     if (fs && fs !== '없음') {
       const fans = [...fs.matchAll(/(?<![\d.])(\d+(?:\.\d+)?|\?)\s*(R?)mm(R?)(?!H)(?:\s*\*\s*(\d+))?/g)];
@@ -1924,7 +1962,7 @@ const PCC = (() => {
           row('화면 버튼', el('label', { class: 'set-chk' }, fabChk, ' 화면에 "완본체 계산기" 버튼 보이기'),
             el('div', { class: 'hint', text: canHideFab() ? '숨기면 단축키나 Tampermonkey 메뉴로만 열 수 있습니다.' : '휴대폰이나 AdGuard처럼 메뉴가 없는 환경에서는 패널을 열 방법이 없어지므로 숨길 수 없습니다.' })),
           row('버튼 위치', el('button', { class: 'btn ghost sm', text: '처음 위치로', onclick: () => { GM_setValue(FABPOS_KEY, null); placeFab(); showToast('화면 버튼을 오른쪽 아래로 옮겼습니다.', 1500); } }),
-            el('div', { class: 'hint', text: '버튼은 끌어서 옮길 수 있고, 옮긴 위치를 기억합니다.' })),
+            el('div', { class: 'hint', text: '버튼은 끌어서 옮길 수 있고, 옮긴 위치를 기억합니다. 캡처할 때는 버튼을 길게 누르면 15초 동안 숨고' + (isTouch ? '' : ', Alt+Shift+H로 숨기기/다시 보이기를 할 수 있습니다') + '.' })),
           isTouch ? null : row('단축키', el('span', {}, '지금: ', keyText, ' '),
             el('button', { class: 'btn ghost sm', text: '바꾸기', onclick: () => { capturing = true; showToast('원하는 단축키를 누르세요. 지금: ' + comboText(getShortcut()) + ' (취소: Esc)'); const t = setInterval(() => { if (!capturing) { clearInterval(t); keyText.textContent = comboText(getShortcut()); } }, 300); } }),
             el('div', { class: 'hint', text: '아무 페이지에서나 이 단축키로 패널을 열고 닫습니다. 다른 기능과 겹치면 바꿔 주세요. (웨일은 Alt+Shift+P가 겹칩니다)' })),
@@ -1934,6 +1972,12 @@ const PCC = (() => {
     panel.append(m);
   }
 
+  // 분류 배지: '추가/수정'처럼 여러 개면 칸을 나눠 각자 색으로 (2개면 반반, 3개면 3분할)
+  const kindBadge = kind => {
+    const parts = String(kind).split(/\s*[\/·,]\s*/).filter(Boolean);
+    if (parts.length < 2) return el('span', { class: 'notes-kind k-' + kind, text: kind });
+    return el('span', { class: 'notes-kind multi' }, parts.map(k => el('span', { class: 'seg k-' + k, text: k })));
+  };
   // 패치노트 팝업: [데이터] [스크립트] 탭, 데이터가 항상 맨 앞·기본
   function openNotesModal(dataList, title) {
     const old = root.querySelector('.notes-modal'); if (old) old.remove();
@@ -1943,7 +1987,7 @@ const PCC = (() => {
       for (const n of list) { let g = groups.find(x => x.ver === n.ver); if (!g) groups.push(g = { ver: n.ver, date: n.date, rows: [] }); g.rows.push(n); }
       return groups.map(g => el('div', { class: 'notes-ver' },
         el('div', { class: 'notes-vt' }, el('b', { text: g.ver }), el('span', { class: 'muted', text: ' ' + g.date })),
-        g.rows.map(r => el('div', { class: 'notes-row' }, r.kind ? el('span', { class: 'notes-kind k-' + r.kind, text: r.kind }) : null, el('span', { text: r.text })))));
+        g.rows.map(r => el('div', { class: 'notes-row' }, r.kind ? kindBadge(r.kind) : null, el('span', { text: r.text })))));
     };
     const tabs = [
       ['데이터', () => listView(dataList, db && db.notes ? '데이터 패치노트가 없습니다.' : '데이터 패치노트는 GitHub 데이터에서만 볼 수 있습니다. 새로고침 후 다시 열어 주세요.')],
@@ -2150,6 +2194,8 @@ const PCC = (() => {
     .notes-link { font-size: 12px; color: #0969da; text-decoration: none; } .notes-link:hover { text-decoration: underline; }
     .notes-kind { flex: none; font-size: 11px; padding: 0 6px; border-radius: 9px; background: #eaeef2; color: #57606a; line-height: 18px; }
     .notes-kind.k-추가 { background: #dafbe1; color: #1a7f37; } .notes-kind.k-삭제 { background: #ffebe9; color: #cf222e; } .notes-kind.k-수정 { background: #ddf4ff; color: #0969da; } .notes-kind.k-변경 { background: #fbefff; color: #8250df; }
+    .notes-kind.multi { display: inline-flex; padding: 0; overflow: hidden; background: none; } .notes-kind .seg { padding: 0 6px; background: #eaeef2; color: #57606a; }
+    .notes-kind .seg.k-추가 { background: #dafbe1; color: #1a7f37; } .notes-kind .seg.k-삭제 { background: #ffebe9; color: #cf222e; } .notes-kind .seg.k-수정 { background: #ddf4ff; color: #0969da; } .notes-kind .seg.k-변경 { background: #fbefff; color: #8250df; }
     .crop { position: fixed; inset: 0; z-index: 2147483647; background: rgba(15,18,22,.82); display: flex; flex-direction: column; }
     .crop .bar { background: #fff; padding: 10px 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; color: #1f2328; }
     .crop .bar b { flex: 1; min-width: 200px; }
@@ -2712,15 +2758,24 @@ const PCC = (() => {
       const name = wrap(r.name, nameW, 14, 'bold');
       const ev = withEval ? EVAL.filter(([k]) => r[k]).map(([k, label, mark, c]) => ({ c, mark, lines: wrap(`${label}: ${r[k]}`, evalW - 18, 12.5) })) : [];
       const h = 14 + name.length * 20 + (withEval && hasScore(r) ? 0 : 0) + ev.reduce((s, x) => s + x.lines.length * 18, 0) + (ev.length ? 6 : 0) + 10;
-      return { r, name, ev, h: Math.max(h, withEval && hasScore(r) ? 56 : 40) };
+      return { r, name, ev, h: Math.max(h, withEval && hasScore(r) ? 66 : 40) };
     });
-    const sums = summaryLines(d, withEval);
+    const showAvg = withEval && d.avg && (d.avg.perf !== null || d.avg.rec !== null);
+    const sums = summaryLines(d, withEval).filter(l => !/^평균 점수/.test(l));   // 평균 점수는 아래에 큰 숫자 두 칸으로
     const iss = issueLines(d).slice(1).flatMap(l => wrap(l, W - pad * 2 - 24, 12.5).map((t, i) => ({ t, first: i === 0 })));
-    const H = pad + 44 + 18 + items.reduce((s, x) => s + x.h, 0) + 16 + sums.length * 26 + 16 + (iss.length ? 30 + iss.length * 18 + 10 : 0) + 30 + pad;
+    const H = pad + 44 + 18 + items.reduce((s, x) => s + x.h, 0) + 16 + (showAvg ? 92 : 0) + sums.length * 26 + 16 + (iss.length ? 30 + iss.length * 18 + 10 : 0) + 30 + pad;
     const c = document.createElement('canvas'); c.width = W * S; c.height = H * S;
     const g = c.getContext('2d');
     const T = (txt, x, y, opt = {}) => { g.font = font(opt.w || '', opt.s || 14); g.fillStyle = opt.c || '#1f2328'; g.textAlign = opt.a || 'left'; g.fillText(txt, x * S, y * S); };
     const line = (y, col) => { g.fillStyle = col; g.fillRect(pad * S, y * S, (W - pad * 2) * S, 1 * S); };
+    // 점수 알약 (스크립트 화면과 같은 색: 7 이상 초록, 5 이상 노랑, 그 아래 빨강) → 오른쪽 끝 x에서 왼쪽으로 그리고 너비를 돌려줌
+    const PC = { hi: ['#dafbe1', '#1a7f37'], mid: ['#fff8c5', '#7d5600'], lo: ['#ffebe9', '#cf222e'], '': ['#eef0f2', '#57606a'] };
+    const lvl = v => { const n = parseFloat(v); return isNaN(n) ? '' : n < 5 ? 'lo' : n < 7 ? 'mid' : 'hi'; };
+    const pill = (txt, v, xr, yt) => {
+      g.font = font('bold', 13); const tw2 = g.measureText(txt).width / S, w = tw2 + 16, h = 22, x = xr - w, [bg, fg] = PC[lvl(v)];
+      g.fillStyle = bg; g.beginPath(); if (g.roundRect) g.roundRect(x * S, yt * S, w * S, h * S, 11 * S); else g.rect(x * S, yt * S, w * S, h * S); g.fill();
+      T(txt, x + w / 2, yt + 15.5, { s: 13, w: 'bold', c: fg, a: 'center' }); return w;
+    };
     g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
     g.fillStyle = '#375623'; g.fillRect(0, 0, c.width, 56 * S);
     T('완본체 견적', pad, 36, { w: 'bold', s: 20, c: '#fff' });
@@ -2730,7 +2785,7 @@ const PCC = (() => {
       T(r.cat, pad, y + 22, { s: 13, c: '#375623', w: 'bold' });
       name.forEach((l, i) => T(l, nameX, y + 22 + i * 20, { s: 14, w: 'bold' }));
       T(priceText(r.price), W - pad, y + 22, { s: 14, w: 'bold', a: 'right', c: r.price == null ? '#cf222e' : '#1f2328' });
-      if (withEval && hasScore(r)) T(`성능 ${r.perf || '-'} · 추천 ${r.rec || '-'}`, W - pad, y + 42, { s: 12, a: 'right', c: '#57606a' });
+      if (withEval && hasScore(r)) { const w2 = pill(`추천 ${r.rec || '-'}`, r.rec, W - pad, y + 34); pill(`성능 ${r.perf || '-'}`, r.perf, W - pad - w2 - 6, y + 34); }
       let ey = y + 22 + name.length * 20 + 4;
       for (const x of ev) {
         T(x.mark, evalX, ey, { s: 12.5, w: 'bold', c: x.c });
@@ -2740,6 +2795,19 @@ const PCC = (() => {
       y += h; line(y, '#eef0f2');
     }
     y += 16;
+    if (showAvg) {   // 평균 성능·추천: 스크립트 화면처럼 큰 숫자 두 칸
+      const gap = 12, tw3 = (W - pad * 2 - gap) / 2;
+      [['평균 성능', d.avg.perf], ['평균 추천', d.avg.rec]].forEach(([lb, v], i) => {
+        const x = pad + i * (tw3 + gap);
+        g.fillStyle = '#e5e7eb'; g.beginPath(); if (g.roundRect) g.roundRect(x * S, y * S, tw3 * S, 76 * S, 10 * S); else g.rect(x * S, y * S, tw3 * S, 76 * S); g.fill();
+        g.fillStyle = '#fff'; g.beginPath(); if (g.roundRect) g.roundRect((x + 1) * S, (y + 1) * S, (tw3 - 2) * S, 74 * S, 9 * S); else g.rect((x + 1) * S, (y + 1) * S, (tw3 - 2) * S, 74 * S); g.fill();
+        T(lb, x + tw3 / 2, y + 24, { s: 13, c: '#57606a', a: 'center' });
+        const num = v ?? '-'; g.font = font('bold', 30); const nw = g.measureText(String(num)).width / S; g.font = font('', 14); const sw2 = g.measureText(' / 10').width / S;
+        const sx = x + tw3 / 2 - (nw + sw2) / 2;
+        T(String(num), sx, y + 60, { s: 30, w: 'bold', c: '#375623' }); T(' / 10', sx + nw, y + 60, { s: 14, c: '#8b949e' });
+      });
+      y += 76 + 16;
+    }
     g.fillStyle = '#f6f8fa'; g.fillRect(pad * S, (y - 4) * S, (W - pad * 2) * S, (sums.length * 26 + 12) * S);
     sums.forEach((l, i) => {
       const isDiff = /보다 (저렴|비쌈):/.test(l), strong = isDiff || /^(부품 합계|합계)/.test(l);
@@ -2773,7 +2841,8 @@ const PCC = (() => {
         catch (e) { showToast('이 사이트에서는 이미지 복사가 막혀 있어 파일로 저장합니다.', 2500); }
       }
       const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-      a.download = `완본체견적_${new Date().toISOString().slice(0, 10)}.png`; document.body.append(a); a.click(); a.remove();
+      const nd = new Date(), z = n => String(n).padStart(2, '0');   // 로컬 시각까지 넣어 파일 이름 중복 방지
+      a.download = `완본체견적_${nd.getFullYear()}-${z(nd.getMonth() + 1)}-${z(nd.getDate())}_${z(nd.getHours())}${z(nd.getMinutes())}${z(nd.getSeconds())}.png`; document.body.append(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 5000);
       if (kind === 'imgsave') showToast('이미지를 저장했습니다.', 1800);
     }
@@ -2947,7 +3016,8 @@ const PCC = (() => {
   const fabDefault = () => true;
   // 화면 버튼을 숨겨도 되는 환경: 메뉴가 있고 휴대폰이 아님 (숨기면 단축키·메뉴로만 열 수 있음)
   const canHideFab = () => HAS_MENU && !(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
-  const applyFab = () => { fab.hidden = !panel.hidden || !GM_getValue(FAB_KEY, fabDefault()); if (!fab.hidden && typeof placeFab === 'function') placeFab(); };
+  let fabTemp = false, fabTempT = 0;   // 캡처할 때 잠깐 숨기기 (저장 안 함)
+  const applyFab = () => { fab.hidden = !panel.hidden || fabTemp || !GM_getValue(FAB_KEY, fabDefault()); if (!fab.hidden && typeof placeFab === 'function') placeFab(); };
   function openPanel() { panel.hidden = false; applyFab(); if (!state.loading) loadData(false); else render(); }
   function closePanel() { panel.hidden = true; applyFab(); }
   const togglePanel = () => (panel.hidden ? openPanel() : closePanel());
@@ -2961,16 +3031,28 @@ const PCC = (() => {
     Object.assign(fab.style, { left: x + 'px', top: y + 'px', right: 'auto', bottom: 'auto' });
   };
   let drag = null;
-  fab.addEventListener('pointerdown', e => { const b = fab.getBoundingClientRect(); drag = { dx: e.clientX - b.left, dy: e.clientY - b.top, sx: e.clientX, sy: e.clientY, moved: false }; fab.setPointerCapture(e.pointerId); });
+  // 잠깐 숨기기: on=true면 숨김(sec초 뒤 자동으로 다시 보임, 0이면 다시 누를 때까지)
+  const tempHideFab = (on, sec) => {
+    clearTimeout(fabTempT); fabTemp = on; applyFab();
+    if (on && sec) fabTempT = setTimeout(() => { fabTemp = false; applyFab(); }, sec * 1000);
+  };
+  let pressT = 0;
+  fab.addEventListener('pointerdown', e => {
+    const b = fab.getBoundingClientRect(); drag = { dx: e.clientX - b.left, dy: e.clientY - b.top, sx: e.clientX, sy: e.clientY, moved: false }; fab.setPointerCapture(e.pointerId);
+    clearTimeout(pressT);
+    pressT = setTimeout(() => { if (drag && !drag.moved) { drag = null; fab.style.cursor = ''; tempHideFab(true, 15); showToast('화면 버튼을 15초 동안 숨깁니다. 지금 캡처하세요.', 2500); } }, 700);   // 길게 누르면 15초 숨김
+  });
+  fab.addEventListener('contextmenu', e => e.preventDefault());
   fab.addEventListener('pointermove', e => {
     if (!drag) return;
     if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 5) return;
-    drag.moved = true;
+    drag.moved = true; clearTimeout(pressT);
     const x = Math.min(Math.max(0, e.clientX - drag.dx), window.innerWidth - fab.offsetWidth);
     const y = Math.min(Math.max(0, e.clientY - drag.dy), window.innerHeight - fab.offsetHeight);
     Object.assign(fab.style, { left: x + 'px', top: y + 'px', right: 'auto', bottom: 'auto', cursor: 'grabbing' });
   });
   fab.addEventListener('pointerup', e => {
+    clearTimeout(pressT);
     if (!drag) return;
     const moved = drag.moved; drag = null; fab.style.cursor = '';
     if (moved) { const b = fab.getBoundingClientRect(); GM_setValue(FABPOS_KEY, { x: b.left / window.innerWidth, y: b.top / window.innerHeight }); }
@@ -2999,6 +3081,10 @@ const PCC = (() => {
     const s = getShortcut();
     if (e.code === s.code && e.ctrlKey === s.ctrl && e.altKey === s.alt && e.shiftKey === s.shift && e.metaKey === s.meta) {
       e.preventDefault(); e.stopPropagation(); togglePanel();
+    }
+    if (e.code === 'KeyH' && e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey) {   // Alt+Shift+H: 화면 버튼 잠깐 숨기기/다시 보이기
+      e.preventDefault(); e.stopPropagation();
+      tempHideFab(!fabTemp, 0); showToast(fabTemp ? '화면 버튼을 숨겼습니다. 다시 보이려면 Alt+Shift+H' : '화면 버튼을 다시 보입니다.', 1800);
     }
   }, true);
   ['keydown', 'keyup', 'keypress'].forEach(ev => panel.addEventListener(ev, e => e.stopPropagation()));
@@ -3131,7 +3217,7 @@ const PCC = (() => {
         '120mm 팬 장착 수': GL, '140mm 팬 장착 수': GL, '기타 크기 팬': 'has', '공랭 쿨러 최대 높이': GL, '그래픽카드 최대 길이': GL, '그래픽카드 최대두께': GL, '파워 규격': HN, '파워 최대 길이': GL,
         '전면 C타입 속도': GL, '전면 C타입 수': GL, '전면 A타입 수': GL, '전면 2.0 수': GL, '2.5" 최대': GL, '3.5" 최대': GL, '부가기능 태그': HAN, '주의사항': 'has' },
       opsRe: [[/라디 1[24]0계열$/, EGL], [/라디 최대(두께|길이)$/, GL]] },
-    'CPU쿨러': { hide: ['분류', '펌프 RPM', '팬 사양', '수치', '램 높이', '부가기능', '라디 계열'],
+    'CPU쿨러': { hide: ['분류', '펌프 RPM', '히트파이프', '팬 사양', '수치', '램 높이', '부가기능', '라디 계열'],
       ops: { '쿨러 종류': 'eq', '타워': 'eq', '라디 크기': EGL, '히트파이프 개수': GL, '펌프 최대 RPM': GL, '팬 개수': EGL, '팬 크기': EGL, '리버스팬 개수': EG, '쿨러 높이': GL, '수랭 호스': GL,
         '램 최대 높이': 'ge', '라디 길이': GL, '라디 두께': GL, '팬 두께': GL, '라디+팬 두께': GL, '부가기능 태그': HAN, '주의사항': 'has' } }
   };
