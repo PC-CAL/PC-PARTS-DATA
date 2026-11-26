@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         완본체 부품 계산기
 // @namespace    https://docs.google.com/spreadsheets/d/1BzS5KSx11k-oaLxc37x33lahjWviZfCqObnbBw54D0I
-// @version      0.21.7
+// @version      0.21.8
 // @description  완본체 판매 페이지의 사양표를 OCR로 읽어 '완본체 부품리스트&계산기' 시트에서 부품 스펙과 다나와 최저가를 찾아 견적표로 만들어 줍니다.
 // @license      MIT
 // @match        *://*/*
@@ -258,6 +258,7 @@ const PCC = (() => {
           const wifi = (wl.match(/WIFI\s*(\d+E?)/i) || [])[1] || '', bt = (wl.match(/블루투스\s*(\d+(?:\.\d+)?)/) || [])[1] || '';
           const wadd = [['무선랜·블루투스', wifi || bt ? '있음' : '없음'], ['WIFI 규격', wifi ? 'WIFI ' + wifi.toUpperCase() : '없음'], ['블루투스 버전', bt || '없음']];
           for (const arr of [it.allSpecs, it.specs]) { const k = arr.findIndex(([h]) => /^WIFI/i.test(h)); arr.splice(k >= 0 ? k + 1 : arr.length, 0, ...wadd); }
+          it.derived = new Set(['규격', '레인 공유 분류', 'x8/x8 지원', '무선랜·블루투스', 'WIFI 규격', '블루투스 버전']);
         }
         it.prices = priceFor(it, price, rules, strip);
         if (part.cat === 'RAM') it.kits = kits[strip('RAM', name)] || null;
@@ -1346,6 +1347,7 @@ const PCC = (() => {
   }
   function putAfter(it, after, pairs) {
     pairs = pairs.filter(Boolean);
+    const dk = it.derived || (it.derived = new Set()); pairs.forEach(([h]) => dk.add(h));   // 검색용으로 만든 항목 표시 (상세 스펙 '전체 항목'에서 거름)
     for (const arr of [it.allSpecs, it.specs]) {
       const add = arr === it.specs ? pairs.filter(([, v]) => v !== '' && v != null) : pairs;
       let k = typeof after === 'string' ? arr.findIndex(([h]) => h === after) : -1;
@@ -2051,7 +2053,9 @@ const PCC = (() => {
     .btn { border: 1px solid #375623; background: #375623; color: #fff; border-radius: 6px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
     .btn.ghost { background: #fff; color: #375623; }
     .btn.sm { padding: 3px 8px; font-size: 12px; }
-    .btnrow { display: flex; gap: 6px; }
+    .btnrow { display: flex; gap: 6px; flex-wrap: wrap; }
+    .btn { white-space: nowrap; } .btnrow > .btn, .btnrow > label { flex: none; }
+    .btnrow > span.hint { flex-basis: 100%; margin-top: 2px; }   /* 버튼 줄의 안내 문구는 항상 버튼 아래 줄로 (버튼 글자가 쪼개지지 않게) */
     .body { flex: 1; overflow-y: auto; }
     .msg { padding: 14px 12px; color: #57606a; line-height: 1.5; white-space: pre-line; }
     .hint { font-size: 12px; color: #6e7781; line-height: 1.45; }
@@ -2106,15 +2110,20 @@ const PCC = (() => {
     .scard { margin: 8px 12px; padding: 10px 12px; background: #f6f8fa; border-left: 4px solid #375623; border-radius: 6px; }
     .scard .shead { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; } .scard .snm { font-weight: 700; flex: 1; min-width: 0; }
     .sgrid { display: grid; grid-template-columns: max-content 1fr; gap: 3px 10px; font-size: 12px; }
-    .sgrid .sk { color: #57606a; font-weight: 600; white-space: nowrap; } .sgrid .sv { line-height: 1.45; word-break: keep-all; }
+    .sgrid .sk { color: #57606a; font-weight: 600; white-space: nowrap; } .sgrid .sv { line-height: 1.45; word-break: keep-all; } .sgrid .sv.empty { color: #b0b7bf; }
     .filters { margin-top: 6px; }
     .filters .frow { display: grid; grid-template-columns: minmax(0, 1.25fr) 88px minmax(0, 1fr) 22px; gap: 4px; align-items: center; margin-bottom: 4px; }
     .filters select, .filters input { font-size: 12px; padding: 4px 6px; border: 1px solid #d0d7de; border-radius: 6px; min-width: 0; width: 100%; height: 28px; box-sizing: border-box; }
     .filters select { text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
     .filters .vwrap { position: relative; min-width: 0; display: flex; } .filters .vwrap input { flex: 1; width: 100%; text-overflow: ellipsis; }
     .filters .vopt .ck { display: inline-block; width: 16px; color: #375623; }
-    @media (max-width: 520px) { .filters .frow { grid-template-columns: minmax(0, 1fr) 88px 22px; } .filters .frow select:first-child { grid-column: 1 / 3; grid-row: 1; }
-      .filters .frow > .x { grid-column: 3; grid-row: 1; } .filters .frow .vwrap { grid-column: 1; grid-row: 2; } .filters .frow select:nth-child(2) { grid-column: 2; grid-row: 2; } }
+    @media (max-width: 520px) { .filters .frow { grid-template-columns: 88px minmax(0, 1fr) 22px; } .filters .frow select:first-child { grid-column: 1 / 3; grid-row: 1; }
+      .filters .frow > .x { grid-column: 3; grid-row: 1; } .filters .frow select:nth-child(2) { grid-column: 1; grid-row: 2; } .filters .frow .vwrap { grid-column: 2; grid-row: 2; } }
+    /* 좁은 화면: 추천 목록은 이름·가격을 첫 줄, 점수는 이름 아래 줄로 (이름이 세로로 쪼개지지 않게) */
+    @media (max-width: 480px) { .item.rank { flex-wrap: wrap; row-gap: 3px; } .item.rank .nm { flex: 1 1 0; min-width: 0; } .item.rank .pr { order: 1; }
+      .item.rank .scorebox { order: 2; flex-basis: 100%; padding-left: 30px; } }
+    /* 아주 좁은 화면(폴드 커버 등): 탭은 가로로 밀어서 보기 */
+    @media (max-width: 340px) { .tabs { overflow-x: auto; scrollbar-width: none; } .tabs button { flex: none; padding: 7px 8px; font-size: 12px; } header .hbtns { gap: 4px; } header .hbtns button { padding: 3px 6px; font-size: 11px; } }
     .filters .vpop { display: none; position: absolute; top: 100%; right: 0; min-width: 100%; width: max-content; max-width: 320px; z-index: 30; max-height: 220px; overflow-y: auto; background: #fff; border: 1px solid #d0d7de; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,.12); margin-top: 2px; }
     .filters .vpop.on { display: block; }
     .filters .vopt { padding: 5px 8px; font-size: 12px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -2182,7 +2191,7 @@ const PCC = (() => {
     .alts { margin-top: 6px; background: #fff8e6; border: 1px solid #f2d48a; border-radius: 6px; padding: 6px; display: flex; flex-direction: column; gap: 4px; }
     .alt { display: flex; justify-content: space-between; gap: 8px; text-align: left; border: 1px solid #e5d3a1; background: #fff; border-radius: 5px; padding: 5px 8px; cursor: pointer; font-size: 12px; color: #1f2328; }
     .alt:hover { background: #fffbf0; } .alt span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .ocrbar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    .ocrbar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; } .ocrbar > .btn { flex: none; } .ocrbar > .hint.onlymouse, .ocrbar > .hint.onlytouch { flex-basis: 100%; }
     .ocrstat { font-size: 12px; color: #375623; }
     .notes-modal { position: absolute; inset: 0; z-index: 50; background: rgba(15,18,22,.45); display: flex; align-items: center; justify-content: center; padding: 16px; }
     .notes-box { background: #fff; border-radius: 10px; width: 100%; max-width: 520px; max-height: 80%; display: flex; flex-direction: column; box-shadow: 0 8px 28px rgba(0,0,0,.25); padding: 12px 14px; }
@@ -2644,7 +2653,7 @@ const PCC = (() => {
     const key = e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } else if (e.key === 'ArrowLeft') show(i - 1); else if (e.key === 'ArrowRight') show(i + 1); };
     window.addEventListener('keydown', key, true);
     const m = el('div', { class: 'crop shots' },
-      el('div', { class: 'bar' }, el('b', { text: 'OCR에 넣은 이미지 (누르면 확대/맞춤)' }), ocrShots.length > 1 ? prev : '', ocrShots.length > 1 ? cnt : '', ocrShots.length > 1 ? next : '',
+      el('div', { class: 'bar' }, el('b', { text: 'OCR에 넣은 이미지 (누르면 확대/맞춤)' }, el('div', { class: 'hint', style: 'font-weight:400', text: '이미지는 용량 때문에 저장하지 않아서, 다른 페이지로 가거나 새로고침하면 사라집니다. 읽은 글자와 견적은 그대로 남습니다.' })), ocrShots.length > 1 ? prev : '', ocrShots.length > 1 ? cnt : '', ocrShots.length > 1 ? next : '',
         el('button', { class: 'btn', text: '닫기', onclick: close })),
       el('div', { class: 'area' }, img));
     root.append(m); show(i);
@@ -2893,14 +2902,27 @@ const PCC = (() => {
   // ----- 견적 상세 스펙 (한눈에 보기) -----
   // 부품 종류별로 보여줄 시트 열 [열 이름, 표시 이름]
   const SPEC_KEYS = {
-    'CPU': [['코어/스레드'], ['최대 클럭'], ['L3 캐시'], ['소비 전력 / 권장 전원부', '전력·권장 전원부']],
+    'CPU': [['코어/스레드'], ['소비 전력 / 권장 전원부', '전력·권장 전원부'], ['최대 클럭'], ['L3 캐시']],
     '메인보드': [['소켓'], ['칩셋'], ['규격'], ['전원부 성능', '전원부'], ['램 슬롯'], ['램 속도', '램 최대 속도'], ['M.2'], ['SATA'], ['PCIe 슬롯'], ['전면 USB 헤더'], ['유선랜 속도', '유선랜'], ['WIFI, 블루투스', '무선']],
     'RAM': [['@ramcap', '용량'], ['세대'], ['클럭-CL', '클럭'], ['다이'], ['방열판과 RGB 유무', '방열판/RGB'], ['램 높이'], ['보증 기간']],
-    '그래픽카드': [['칩셋'], ['가로 길이', '길이'], ['두께'], ['전원 포트'], ['소비 전력(최대 제한 전력)', '소비 전력'], ['쿨링팬'], ['전원부']],
-    'SSD': [['용량'], ['컨트롤러'], ['낸드 정보', '낸드'], ['디램 스펙', '디램'], ['순차 읽기'], ['순차 쓰기'], ['TBW'], ['보증 기간']],
+    '그래픽카드': [['칩셋'], ['가로 길이', '길이'], ['두께'], ['전원 포트'], ['전원부'], ['소비 전력(최대 제한 전력)', '소비 전력'], ['쿨링팬']],
+    'SSD': [['용량'], ['컨트롤러'], ['낸드 정보', '낸드'], ['디램 스펙', '디램'], ['순차 읽기'], ['순차 쓰기'], ['보증 기간'], ['TBW']],
     '파워서플라이': [['@watt', '용량'], ['80PLUS 인증'], ['모듈러 여부', '모듈러'], ['AS 기간'], ['CPU 보조전원'], ['PCIe 8핀 케이블', 'PCIe 8핀'], ['12V-2x6 케이블', '12V-2x6'], ['Cybenetics 인증']],
-    '케이스': [['타입'], ['사이즈', '크기(mm)'], ['최대 지원 보드 규격', '지원 보드'], ['그래픽카드', '그래픽카드 길이'], ['공랭 쿨러 최대 높이', '쿨러 높이'], ['전면 라디'], ['상단 라디'], ['기본 제공 팬'], ['전면 USB']],
-    'CPU쿨러': [['분류'], ['수치', '높이 / 라디'], ['팬 사양'], ['램 높이', '램 간섭 높이'], ['수랭 호스']]
+    '케이스': [['타입'], ['사이즈', '크기(mm)'], ['최대 지원 보드 규격', '지원 보드'], ['기본 제공 팬'], ['공랭 쿨러 최대 높이', '쿨러 높이'], ['전면 라디'], ['상단 라디'], ['그래픽카드', '그래픽카드 길이'], ['전면 USB']],
+    'CPU쿨러': [['분류'], ['팬 사양'], ['수치', '높이 / 라디'], ['수랭 호스'], ['램 높이', '램 간섭 높이']]
+  };
+  // 상세 스펙 '전체 항목': 남길 검색용 항목 / 여러 값을 합친 시트 칸 → 나눠서 보여 줄 항목 (11/27 결정)
+  const SPEC_KEEP = { 'CPU': ['소켓'], '메인보드': ['규격', 'x8/x8 지원'], 'RAM': ['클럭÷CL', '보증 기간'], '그래픽카드': ['슬롯 수'], 'SSD': ['TB당 TBW'],
+    '파워서플라이': ['정격 출력'], '케이스': ['부피'], 'CPU쿨러': [] };
+  const SPEC_SPLIT = {
+    'CPU': { '코어/스레드': ['코어 수', '스레드 수'], '소비 전력 / 권장 전원부': ['소비 전력', '권장 전원부'] },
+    '메인보드': { '팬/RGB 헤더': ['팬헤더 수', 'ARGB 헤더 수', '12V RGB 헤더 수', '전용 커넥터 수'], 'WIFI, 블루투스': ['WIFI 규격', '블루투스 버전'] },
+    'RAM': { '클럭-CL': ['클럭', 'CL'], '방열판과 RGB 유무': ['방열판', 'RGB'] },
+    '그래픽카드': { '소비 전력(최대 제한 전력)': ['기본 전력', '최대 제한 전력'], '쿨링팬': ['팬 개수', '팬 크기'] },
+    'SSD': { '분류': ['인터페이스', '낸드 종류', '디램'] },
+    '파워서플라이': { 'Cybenetics 인증': ['사이베네틱스 효율', '사이베네틱스 소음'], '12V-2x6 케이블': ['12V-2x6 개수', '12V-2x6 최대 W'] },
+    '케이스': { '사이즈': ['가로', '깊이', '높이'] },
+    'CPU쿨러': { '수치': ['쿨러 높이', '라디 길이', '라디 두께', '라디+팬 두께'] }
   };
   // full=true: 시트의 모든 스펙 항목 (용량·개수, 메인보드 규격은 맨 앞에 덧붙임)
   function specPairs(r, full) {
@@ -2909,15 +2931,27 @@ const PCC = (() => {
       const head = [];
       if (it.cat === 'RAM') head.push(['용량', ramCapText(it, r)]);
       if ((it.cat === 'SSD' || it.cat === '케이스' || it.cat === 'CPU쿨러') && r.opt && it.cat !== 'SSD') head.push(['색상', r.opt]);
+      // 시트 원래 칸은 모두, 검색용 항목은 새 정보를 주는 것(SPEC_KEEP)만. 여러 값을 합친 칸은 나눈 항목(SPEC_SPLIT)으로 바꿔 보여 줌
+      const all = it.allSpecs || it.specs, der = it.derived || new Set(), val = h => String((all.find(([k]) => k === h) || [])[1] || '').trim();
+      const keep = new Set(SPEC_KEEP[it.cat] || []), split = SPEC_SPLIT[it.cat] || {};
       let prev = '';
-      const body = (it.allSpecs || it.specs).map(([h, v]) => {
+      const body = [];
+      for (const [h, v] of all) {
+        if (der.has(h) && !keep.has(h)) continue;
+        if (split[h]) {
+          const parts = split[h].filter(k => der.has(k) && (it.cat !== 'CPU쿨러' || val(k)));   // 쿨러는 공랭·수랭에 해당 없는 칸은 뺌
+          if (parts.length && parts.some(val)) { parts.forEach(k => body.push([k, val(k)])); prev = h; continue; }
+        }
         const label = /^[AC]$/.test(h) ? `${/전면/.test(prev) ? '전면' : '후면'} USB ${h}타입` : h;
         if (!/^[AC]$/.test(h)) prev = h;
-        return [label, String(v || '').trim()];
-      });
+        body.push([label, String(v || '').trim()]);
+      }
       return head.concat(body).map(([k, v]) => [k, v || '-']);   // 빈칸도 '-'로 남겨서 어떤 항목이 비었는지 보이게
     }
-    return (SPEC_KEYS[it.cat] || []).map(([h, label]) => {
+    // 주요 항목도 시트 칸 순서대로 (용량처럼 시트에 없는 항목은 맨 앞, 파워 용량은 시트 '용량' 자리)
+    const order = (it.allSpecs || it.specs).map(([h]) => h), idx = h => h === '@ramcap' ? -1 : order.indexOf(h === '@watt' ? '용량' : h);
+    return (SPEC_KEYS[it.cat] || []).filter(([h]) => h[0] === '@' || idx(h) >= 0)   // 그 제품에 없는 칸(공랭의 수랭 호스 등)은 뺌
+      .sort((a, b) => idx(a[0]) - idx(b[0])).map(([h, label]) => {
       let v;
       if (h === '@ramcap') v = ramCapText(it, r);
       else if (h === '@watt') v = (it.name.match(/\d{3,4}\s*W/i) || [spec(it, '용량')])[0];
@@ -2941,7 +2975,7 @@ const PCC = (() => {
     if (!rows.length) { body.append(el('div', { class: 'msg', text: '견적에 부품이 없습니다.' })); return; }
     rows.forEach(r => {
       const it = byKey.get(r.key);
-      const grid = el('div', { class: 'sgrid' }, specPairs(r, full).flatMap(([k, v]) => [el('div', { class: 'sk', text: k }), el('div', { class: 'sv', text: v })]));
+      const grid = el('div', { class: 'sgrid' }, specPairs(r, full).flatMap(([k, v]) => [el('div', { class: 'sk', text: k }), el('div', { class: 'sv' + (v === '-' ? ' empty' : ''), text: v })]));
       body.append(el('div', { class: 'scard' },
         el('div', { class: 'shead' }, el('span', { class: 'cat', text: it.cat }), el('span', { class: 'snm', text: rowTitle(r) }),
           el('button', { class: 'info', text: '전체 스펙', onclick: () => { state.selected = it; render(); } })),
@@ -2971,10 +3005,12 @@ const PCC = (() => {
     // 부품마다: 제목 + 2단 칸(항목: 값)
     const cards = rows.map(r => {
       const title = wrap(rowTitle(r), W - pad * 2 - 110, 15, 'bold');
-      const cells = specPairs(r, full).map(([k, v]) => ({ k: wrap(k, keyW - 6, 12, 'bold'), v: wrap(v, colW - keyW - 8, 12.5) }));
-      const rowsH = []; const ln = c => (c ? Math.max(c.v.length, c.k.length) : 0);
-      for (let i = 0; i < cells.length; i += 2) rowsH.push(Math.max(ln(cells[i]), ln(cells[i + 1])) * 18 + 6);
-      return { r, title, cells, rowsH, h: 16 + title.length * 22 + 6 + rowsH.reduce((a, b) => a + b, 0) + 14 };
+      const cells = specPairs(r, full).map(([k, v]) => ({ k: wrap(k, keyW - 6, 12, 'bold'), v: wrap(v, colW - keyW - 8, 12.5), empty: v === '-' }));
+      // 시트 순서대로 읽히게: 왼쪽 칸을 위→아래로 먼저 채우고, 나머지를 오른쪽 칸에
+      const hh = c => Math.max(c.v.length, c.k.length) * 18 + 6, half = Math.ceil(cells.length / 2);
+      const cols = [cells.slice(0, half), cells.slice(half)];
+      const colH = Math.max(...cols.map(cl => cl.reduce((a, c) => a + hh(c), 0)));
+      return { r, title, cols, hh, h: 16 + title.length * 22 + 6 + colH + 14 };
     });
     const H = 56 + 16 + cards.reduce((s, c) => s + c.h + 10, 0) + 34;
     const c = document.createElement('canvas'); c.width = W * S; c.height = H * S;
@@ -2991,15 +3027,14 @@ const PCC = (() => {
       T(cd.r.cat, pad + 14, y + 26, { w: 'bold', s: 13, c: '#375623' });
       cd.title.forEach((l, i) => T(l, pad + 110, y + 26 + i * 22, { w: 'bold', s: 15 }));
       let yy = y + 16 + cd.title.length * 22 + 10;
-      for (let i = 0; i < cd.cells.length; i += 2) {
-        [cd.cells[i], cd.cells[i + 1]].forEach((cell, j) => {
-          if (!cell) return;
-          const x = pad + 14 + j * (colW + 12);
-          cell.k.forEach((l, k) => T(l, x, yy + 12 + k * 18, { s: 12, c: '#57606a', w: 'bold' }));
-          cell.v.forEach((l, k) => T(l, x + keyW, yy + 12 + k * 18, { s: 12.5 }));
-        });
-        yy += cd.rowsH[i / 2];
-      }
+      cd.cols.forEach((cl, j) => {
+        const x = pad + 14 + j * (colW + 12); let cy = yy;
+        for (const cell of cl) {
+          cell.k.forEach((l, k) => T(l, x, cy + 12 + k * 18, { s: 12, c: '#57606a', w: 'bold' }));
+          cell.v.forEach((l, k) => T(l, x + keyW, cy + 12 + k * 18, cell.empty ? { s: 12.5, c: '#b0b7bf' } : { s: 12.5 }));   // 빈 값은 흐리게
+          cy += cd.hh(cell);
+        }
+      });
       y += cd.h + 10;
     }
     T(`다나와 가격 갱신 ${(db.rules.priceDate || '').replace(/^.*?:\s*/, '')} · 데이터 ${(db.rules.version || '').replace(/^.*?:\s*/, '')}`, pad, y + 18, { s: 11.5, c: '#8b949e' });
@@ -3808,7 +3843,7 @@ const PCC = (() => {
       el('span', { class: 'hint', text: '이미지로 읽기:' }),
       el('button', { class: 'btn ghost sm', text: '페이지 이미지 고르기', onclick: pickPageImage }),
       el('button', { class: 'btn ghost sm', text: '이미지 파일', onclick: () => fileIn.click() }),
-      ocrShots.length ? el('button', { class: 'btn ghost sm', text: `선택한 이미지${ocrShots.length > 1 ? ' (' + ocrShots.length + ')' : ''}`, onclick: () => openShots() }) : '',
+      ocrShots.length ? el('button', { class: 'btn ghost sm', text: `선택한 이미지${ocrShots.length > 1 ? ' (' + ocrShots.length + ')' : ''}`, title: '이 페이지에서 OCR에 넣은 이미지 (다른 페이지로 가거나 새로고침하면 사라짐)', onclick: () => openShots() }) : '',
       el('span', { class: 'hint onlymouse', text: '또는 캡처(Win+Shift+S) 후 여기서 Ctrl+V' }),
       el('span', { class: 'hint onlytouch', text: '휴대폰: 판매 페이지를 캡처한 뒤 "이미지 파일"로 고르세요' }), fileIn);
     const taLabel = el('div', { class: 'hint', text: build.text.trim() ? '읽은 글자 (틀린 글자를 고치고 "부품 찾기"를 다시 누르거나, 아래 부품의 "읽은 글자"를 눌러 한 줄씩 고칠 수 있습니다)' : '' });
