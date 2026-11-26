@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         완본체 부품 계산기
 // @namespace    https://docs.google.com/spreadsheets/d/1BzS5KSx11k-oaLxc37x33lahjWviZfCqObnbBw54D0I
-// @version      0.21.5
+// @version      0.21.6
 // @description  완본체 판매 페이지의 사양표를 OCR로 읽어 '완본체 부품리스트&계산기' 시트에서 부품 스펙과 다나와 최저가를 찾아 견적표로 만들어 줍니다.
 // @license      MIT
 // @match        *://*/*
@@ -556,7 +556,10 @@ const PCC = (() => {
     cands = cands.slice(0, 8);
     // 사진 속 글자 조각 같은 쓰레기 줄 거르기: 점수가 충분하고, 3글자 이상 단어가 실제로 하나 이상 맞아야 함
     const strongHit = it => toks.some((t, i) => t.length >= 3 && !GENERIC.has(t) && !BRANDS.has(t) && /[a-z가-힣]|\d{3}/.test(t) && (hasTok(it, t) || ((/\d/.test(t) || t.length >= 5) && stoks[i].length >= 3 && it.shape && it.shape.includes(stoks[i]))));
-    if (!cands.length || cands[0].s < 0.5 || !strongHit(cands[0].it)) {
+    // 짧은 모델명(D7, O11, H9 등 영문+숫자 2~3글자)은 제조사·부품 종류가 같이 적혀 있거나, 적힌 단어가 모두 제품명에 있을 때만 확실한 단어로 인정
+    const shortHit = it => (p.cat || (toks.length >= 2 && toks.every(t => hasTok(it, t))) || lineBrands.some(b => it.search.includes(b) || (toEnglish(b) && toEnglish(b).split(' ').some(e => e && it.search.includes(e)))))
+      && toks.some(t => /^(?=.*[a-z])(?=.*\d)[a-z0-9]{2,3}$/.test(t) && hasTok(it, t));
+    if (!cands.length || cands[0].s < 0.5 || !(strongHit(cands[0].it) || shortHit(cands[0].it))) {
       const rg = ramGuess(db, p, toks); if (rg) return rg;
       return { ...p, cands: [], weak: true, cat: p.cat };
     }
@@ -1015,7 +1018,7 @@ const PCC = (() => {
   const Y_CABLE_MAX_W = n8 => n8 <= 2 ? 220 : 360;
   // SSD 자체 방열판: 이름(히트싱크·heatsink·방열판) 또는 시트 비고·가점·이슈의 '방열판 탑재/포함'
   const ssdNotes = it => [it.note, it.plus, it.issue].filter(Boolean).join(' ');
-  const ssdHasHeatsink = it => /히트싱크|heatsink|방열판/i.test(it.name) || /방열판\s*(탑재|포함|있음|장착|사이즈)|히트싱크\s*(탑재|포함)/i.test(ssdNotes(it));
+  const ssdHasHeatsink = it => /히트싱크|heatsink|방열판/i.test(it.name) || /방열판(이|을)?\s*(탑재|포함|있음|장착|사이즈)|히트싱크(가|를)?\s*(탑재|포함)/i.test(ssdNotes(it));
   function checkBuild(rows, opt) {
     const R = [];
     const add = (level, title, detail) => R.push({ level, title, detail: detail || '' });
