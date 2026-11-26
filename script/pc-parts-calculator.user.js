@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         완본체 부품 계산기
 // @namespace    https://docs.google.com/spreadsheets/d/1BzS5KSx11k-oaLxc37x33lahjWviZfCqObnbBw54D0I
-// @version      0.21.6
+// @version      0.21.7
 // @description  완본체 판매 페이지의 사양표를 OCR로 읽어 '완본체 부품리스트&계산기' 시트에서 부품 스펙과 다나와 최저가를 찾아 견적표로 만들어 줍니다.
 // @license      MIT
 // @match        *://*/*
@@ -2029,8 +2029,9 @@ const PCC = (() => {
       color: #1f2328; box-shadow: -4px 0 18px rgba(0,0,0,.18); display: flex; flex-direction: column; font-size: 13px; }
     .panel[hidden], .fab[hidden] { display: none; }
     header { background: #375623; color: #fff; padding: 10px 12px 0; }
-    header .row { display: flex; align-items: center; gap: 8px; }
-    header h1 { font-size: 15px; margin: 0; flex: 1; }
+    header .row { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; }
+    header h1 { font-size: 15px; margin: 0; flex: 1 0 auto; white-space: nowrap; }   /* 제목은 줄바꿈 없이, 자리가 모자라면 버튼이 다음 줄로 */
+    header .hbtns { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
     header .meta { font-size: 11px; opacity: .85; margin-top: 4px; line-height: 1.5; }
     header .meta .mrow { display: flex; flex-wrap: wrap; column-gap: 0; } header .meta .mi { white-space: nowrap; } header .meta .mi + .mi::before { content: '·'; margin: 0 6px; }
     header button { background: rgba(255,255,255,.15); color: #fff; border: 1px solid rgba(255,255,255,.35); border-radius: 6px;
@@ -2203,11 +2204,16 @@ const PCC = (() => {
     .crop .bar { background: #fff; padding: 10px 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; color: #1f2328; }
     .crop .bar b { flex: 1; min-width: 200px; }
     .crop .area { flex: 1; overflow: auto; padding: 16px; display: flex; justify-content: center; }
-    .crop .stage { position: relative; align-self: flex-start; cursor: crosshair; user-select: none; }
-    .crop .stage img { display: block; max-width: calc(100vw - 48px); height: auto; pointer-events: none; }
-    .crop .sel { position: absolute; border: 2px solid #4ade80; background: rgba(74,222,128,.15); box-shadow: 0 0 0 9999px rgba(0,0,0,.35); pointer-events: none; }
+    .crop .stage { position: relative; align-self: flex-start; cursor: crosshair; user-select: none; margin: 20px; }
+    .crop .stage img { display: block; max-width: calc(100vw - 88px); height: auto; pointer-events: none; }
+    .crop .sel { position: absolute; border: 2px solid #4ade80; background: rgba(74,222,128,.08); box-shadow: 0 0 0 9999px rgba(0,0,0,.45); cursor: move; box-sizing: border-box; }
+    .crop .hd { position: absolute; width: 40px; height: 40px; margin: -20px 0 0 -20px; z-index: 2; touch-action: none; }
+    .crop .hd::after { content: ''; position: absolute; left: 13px; top: 13px; width: 14px; height: 14px; background: #fff; border: 2px solid #22a34a; border-radius: 3px; box-sizing: border-box; }
+    .crop .hd-nw { left: 0; top: 0; cursor: nwse-resize; } .crop .hd-ne { left: 100%; top: 0; cursor: nesw-resize; } .crop .hd-sw { left: 0; top: 100%; cursor: nesw-resize; } .crop .hd-se { left: 100%; top: 100%; cursor: nwse-resize; }
+    .crop .hd-n { left: 50%; top: 0; cursor: ns-resize; } .crop .hd-s { left: 50%; top: 100%; cursor: ns-resize; } .crop .hd-w { left: 0; top: 50%; cursor: ew-resize; } .crop .hd-e { left: 100%; top: 50%; cursor: ew-resize; }
+    .crop .hd-n::after, .crop .hd-s::after { left: 8px; top: 15px; width: 24px; height: 10px; } .crop .hd-w::after, .crop .hd-e::after { left: 15px; top: 8px; width: 10px; height: 24px; }
+    .crop.shots .area { align-items: flex-start; } .crop.shots img { max-width: 100%; height: auto; background: #fff; cursor: zoom-in; } .crop.shots img.zoom { max-width: none; cursor: zoom-out; }
     .crop .stage { touch-action: none; }
-    .crop .quick { position: absolute; z-index: 2; display: flex; gap: 4px; background: #fff; padding: 4px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.35); }
     .onlytouch { display: none; }
     /* 휴대폰 (좁은 화면·터치) */
     @media (max-width: 600px), (pointer: coarse) {
@@ -2222,14 +2228,14 @@ const PCC = (() => {
       .cmpwrap, .answer { overflow-x: auto; }
       table.cmp { min-width: 560px; }
       .crop .bar { padding: 8px 10px; } .crop .bar b { min-width: 100%; font-size: 13px; }
-      .crop .area { padding: 8px; } .crop .stage img { max-width: calc(100vw - 16px); }
+      .crop .area { padding: 4px; } .crop .stage { margin: 18px; } .crop .stage img { max-width: calc(100vw - 48px); }
       .sum .line input { width: 120px; }
     }
   </style>
   <button class="fab" title="완본체 계산기 열기" hidden>완본체 계산기</button>
   <div class="panel" hidden>
     <header>
-      <div class="row"><h1>완본체 부품 계산기</h1><button data-act="sheet" title="원본 구글 시트 열기">원본 시트</button><button data-act="notes" title="데이터·스크립트 패치노트">패치노트</button><button data-act="settings" title="화면 버튼·단축키 설정">설정</button><button data-act="refresh">새로고침</button><button data-act="close">닫기</button></div>
+      <div class="row"><h1>완본체 부품 계산기</h1><div class="hbtns"><button data-act="sheet" title="원본 구글 시트 열기">원본 시트</button><button data-act="notes" title="데이터·스크립트 패치노트">패치노트</button><button data-act="settings" title="화면 버튼·단축키 설정">설정</button><button data-act="refresh">새로고침</button><button data-act="close">닫기</button></div></div>
       <div class="meta"></div>
       <div class="tabs"><button data-mode="build">계산기</button><button data-mode="power">파워 계산</button><button data-mode="saved">저장한 견적</button><button data-mode="search">부품 검색</button><button data-mode="parts">부품 비교</button></div>
     </header>
@@ -2554,62 +2560,94 @@ const PCC = (() => {
         bitmap = c;
       } catch (e2) { URL.revokeObjectURL(url); openPanel(); setOcrStatus('이미지를 열 수 없습니다.'); return; }
     }
+    // 자르기 방식: 처음엔 이미지 전체가 선택된 상태 → 테두리·모서리 손잡이를 끌어 잘라냄, 상자 안을 끌면 이동, 상자 밖을 끌면 새로 그림
     const img = el('img', { src: url, alt: '' });
-    const sel = el('div', { class: 'sel', style: 'display:none' });
-    // 선택 박스 바로 아래(공간이 없으면 위)에 뜨는 작은 버튼: 이 영역 읽기 / 다시
-    const quick = el('div', { class: 'quick', style: 'display:none' },
-      el('button', { class: 'btn sm', text: '이 영역 읽기', onpointerdown: e => e.stopPropagation(), onclick: () => go(true) }),
-      el('button', { class: 'btn ghost sm', text: '다시', onpointerdown: e => e.stopPropagation(), onclick: () => clearSel() }));
-    const stage = el('div', { class: 'stage' }, img, sel, quick);
-    let start = null, rect = null, onMove, onUp, onKey;
-    const hasSel = () => !!(rect && rect.w > 8 && rect.h > 8);
+    const HANDLES = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
+    const sel = el('div', { class: 'sel' }, HANDLES.map(h => el('i', { class: 'hd hd-' + h, 'data-h': h })));
+    const stage = el('div', { class: 'stage' }, img, sel);
+    let rect = null, act = null, onMove, onUp, onKey;
+    const W = () => img.clientWidth, H = () => img.clientHeight, MIN = 24;
+    const full = () => ({ x: 0, y: 0, w: W(), h: H() });
+    const isFull = () => !rect || (rect.x < 2 && rect.y < 2 && rect.w > W() - 4 && rect.h > H() - 4);
+    const draw = () => Object.assign(sel.style, { left: rect.x + 'px', top: rect.y + 'px', width: rect.w + 'px', height: rect.h + 'px' });
     const pos = e => { const b = stage.getBoundingClientRect(); return { x: Math.max(0, Math.min(e.clientX - b.left, b.width)), y: Math.max(0, Math.min(e.clientY - b.top, b.height)) }; };
-    // 선택이 있으면 '선택 영역 읽기', 없으면 '전체 읽기'가 진한(주) 버튼
-    const selBtn = el('button', { class: 'btn ghost', text: '선택 영역 읽기', onclick: () => go(true) });
-    const allBtn = el('button', { class: 'btn', text: '전체 읽기', onclick: () => go(false) });
-    const syncBtns = () => {
-      const on = hasSel();
-      selBtn.className = on ? 'btn' : 'btn ghost'; allBtn.className = on ? 'btn ghost' : 'btn';
-      selBtn.title = on ? 'Enter' : '먼저 사양 부분을 드래그해서 선택하세요';
-      if (on) {
-        quick.style.display = 'flex';
-        const below = rect.y + rect.h + 6, h = quick.offsetHeight || 30;
-        const top = below + h <= stage.clientHeight ? below : Math.max(0, rect.y - h - 6);
-        const left = Math.min(rect.x, Math.max(0, stage.clientWidth - (quick.offsetWidth || 150)));
-        Object.assign(quick.style, { top: top + 'px', left: left + 'px' });
-      } else quick.style.display = 'none';
-    };
-    const clearSel = () => { rect = null; sel.style.display = 'none'; syncBtns(); };
-    stage.addEventListener('pointerdown', e => { e.preventDefault(); try { stage.setPointerCapture(e.pointerId); } catch (_) {} start = pos(e); rect = null; sel.style.display = 'none'; quick.style.display = 'none'; });
-    window.addEventListener('pointermove', onMove = e => {
-      if (!start) return; const p = pos(e);
-      rect = { x: Math.min(start.x, p.x), y: Math.min(start.y, p.y), w: Math.abs(p.x - start.x), h: Math.abs(p.y - start.y) };
-      Object.assign(sel.style, { display: 'block', left: rect.x + 'px', top: rect.y + 'px', width: rect.w + 'px', height: rect.h + 'px' });
+    const reset = () => { rect = full(); draw(); };
+    const ready = () => { if (W()) reset(); else setTimeout(ready, 50); };
+    img.addEventListener('load', ready); if (img.complete) ready();
+    stage.addEventListener('pointerdown', e => {
+      e.preventDefault(); try { stage.setPointerCapture(e.pointerId); } catch (_) {}
+      const p = pos(e), h = e.target.dataset && e.target.dataset.h;
+      const inside = rect && p.x > rect.x && p.x < rect.x + rect.w && p.y > rect.y && p.y < rect.y + rect.h;
+      act = h ? { kind: 'resize', h, p0: p, r0: { ...rect } } : inside ? { kind: 'move', p0: p, r0: { ...rect } } : { kind: 'new', p0: p };
     });
-    window.addEventListener('pointerup', onUp = () => { if (!start) return; start = null; if (!hasSel()) clearSel(); else syncBtns(); });
+    window.addEventListener('pointermove', onMove = e => {
+      if (!act) return;
+      const p = pos(e), dx = p.x - act.p0.x, dy = p.y - act.p0.y;
+      if (act.kind === 'new') rect = { x: Math.min(act.p0.x, p.x), y: Math.min(act.p0.y, p.y), w: Math.abs(dx), h: Math.abs(dy) };
+      else if (act.kind === 'move') { const r = act.r0; rect = { ...r, x: Math.max(0, Math.min(r.x + dx, W() - r.w)), y: Math.max(0, Math.min(r.y + dy, H() - r.h)) }; }
+      else {
+        const r = act.r0; let x0 = r.x, y0 = r.y, x1 = r.x + r.w, y1 = r.y + r.h;
+        if (act.h.includes('w')) x0 = Math.max(0, Math.min(r.x + dx, x1 - MIN));
+        if (act.h.includes('e')) x1 = Math.min(W(), Math.max(x1 + dx, x0 + MIN));
+        if (act.h.includes('n')) y0 = Math.max(0, Math.min(r.y + dy, y1 - MIN));
+        if (act.h.includes('s')) y1 = Math.min(H(), Math.max(y1 + dy, y0 + MIN));
+        rect = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+      }
+      draw();
+    });
+    window.addEventListener('pointerup', onUp = () => { if (!act) return; const k = act.kind; act = null; if (k === 'new' && (rect.w < MIN || rect.h < MIN)) reset(); });
     window.addEventListener('pointercancel', onUp);
-    // Enter: 선택이 있으면 그 영역, 없으면 전체 / Esc: 닫기
+    // Enter: 읽기 / Esc: 닫기
     window.addEventListener('keydown', onKey = e => {
-      if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); go(hasSel()); }
+      if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); go(); }
       else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
     }, true);
     const close = () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); window.removeEventListener('pointercancel', onUp); window.removeEventListener('keydown', onKey, true); URL.revokeObjectURL(url); modal.remove(); };
-    const go = useRect => {
+    const go = () => {
       let region = null;
-      if (useRect && hasSel()) {
-        const k = bitmap.width / img.clientWidth;
+      if (!isFull()) {
+        const k = bitmap.width / W();
         region = { x: Math.round(rect.x * k), y: Math.round(rect.y * k), w: Math.round(rect.w * k), h: Math.round(rect.h * k) };
       }
+      keepShot(bitmap, region);
       close(); openPanel(); state.mode = 'build'; render(); runOcr(bitmap, region);
     };
     const modal = el('div', { class: 'crop' },
       el('div', { class: 'bar' },
-        el('b', { text: isTouch ? '사양이 적힌 부분을 손가락으로 끌어서 선택하세요. 좁게 고를수록 정확합니다.' : '사양이 적힌 부분을 드래그해서 선택하고 Enter를 누르세요. 좁게 고를수록 정확합니다.' }),
-        selBtn, allBtn,
+        el('b', { text: isTouch ? '테두리나 모서리를 끌어서 사양 부분만 남기세요. 좁게 고를수록 정확합니다.' : '테두리·모서리를 끌어 사양 부분만 남기고 Enter를 누르세요. (상자 밖을 끌면 새로 그림)' }),
+        el('button', { class: 'btn', text: '읽기', title: 'Enter', onclick: () => go() }),
+        el('button', { class: 'btn ghost', text: '처음으로', title: '이미지 전체 선택', onclick: () => reset() }),
         el('button', { class: 'btn ghost', text: '취소', onclick: () => close() })),
       el('div', { class: 'area' }, stage));
     root.append(modal);
-    syncBtns();
+  }
+  // OCR에 넣은 이미지(잘라낸 부분)를 패널을 쓰는 동안만 보관 → '선택한 이미지'로 확인. '비우기'를 누르면 같이 지움
+  let ocrShots = [];
+  function keepShot(bitmap, region) {
+    try {
+      const r = region || { x: 0, y: 0, w: bitmap.width, h: bitmap.height }, k = Math.min(1, 1600 / r.w);
+      const c = document.createElement('canvas'); c.width = Math.round(r.w * k); c.height = Math.round(r.h * k);
+      const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(bitmap, r.x, r.y, r.w, r.h, 0, 0, c.width, c.height);
+      ocrShots.push(c.toDataURL('image/jpeg', 0.85));
+      if (ocrShots.length > 10) ocrShots.shift();
+    } catch (e) {}
+  }
+  function openShots(start) {
+    if (!ocrShots.length) return;
+    let i = Math.min(start ?? ocrShots.length - 1, ocrShots.length - 1);
+    const img = el('img', { alt: '선택한 이미지', title: '누르면 확대/맞춤' });
+    const cnt = el('span', { class: 'hint' });
+    const prev = el('button', { class: 'btn ghost sm', text: '◀ 이전', onclick: () => show(i - 1) }), next = el('button', { class: 'btn ghost sm', text: '다음 ▶', onclick: () => show(i + 1) });
+    const show = n => { i = Math.max(0, Math.min(n, ocrShots.length - 1)); img.src = ocrShots[i]; img.classList.remove('zoom'); cnt.textContent = `${i + 1} / ${ocrShots.length}`; prev.disabled = i === 0; next.disabled = i === ocrShots.length - 1; };
+    img.addEventListener('click', () => img.classList.toggle('zoom'));
+    const close = () => { window.removeEventListener('keydown', key, true); m.remove(); };
+    const key = e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } else if (e.key === 'ArrowLeft') show(i - 1); else if (e.key === 'ArrowRight') show(i + 1); };
+    window.addEventListener('keydown', key, true);
+    const m = el('div', { class: 'crop shots' },
+      el('div', { class: 'bar' }, el('b', { text: 'OCR에 넣은 이미지 (누르면 확대/맞춤)' }), ocrShots.length > 1 ? prev : '', ocrShots.length > 1 ? cnt : '', ocrShots.length > 1 ? next : '',
+        el('button', { class: 'btn', text: '닫기', onclick: close })),
+      el('div', { class: 'area' }, img));
+    root.append(m); show(i);
   }
   // 페이지의 이미지를 클릭해서 고르기
   function pickPageImage() {
@@ -3770,13 +3808,14 @@ const PCC = (() => {
       el('span', { class: 'hint', text: '이미지로 읽기:' }),
       el('button', { class: 'btn ghost sm', text: '페이지 이미지 고르기', onclick: pickPageImage }),
       el('button', { class: 'btn ghost sm', text: '이미지 파일', onclick: () => fileIn.click() }),
+      ocrShots.length ? el('button', { class: 'btn ghost sm', text: `선택한 이미지${ocrShots.length > 1 ? ' (' + ocrShots.length + ')' : ''}`, onclick: () => openShots() }) : '',
       el('span', { class: 'hint onlymouse', text: '또는 캡처(Win+Shift+S) 후 여기서 Ctrl+V' }),
       el('span', { class: 'hint onlytouch', text: '휴대폰: 판매 페이지를 캡처한 뒤 "이미지 파일"로 고르세요' }), fileIn);
     const taLabel = el('div', { class: 'hint', text: build.text.trim() ? '읽은 글자 (틀린 글자를 고치고 "부품 찾기"를 다시 누르거나, 아래 부품의 "읽은 글자"를 눌러 한 줄씩 고칠 수 있습니다)' : '' });
     controls.replaceChildren(taLabel, ta, ocrBar, el('div', { class: 'ocrstat', text: ocrStatus }), el('div', { class: 'btnrow' },
       el('button', { class: 'btn', text: '부품 찾기', onclick: () => { build.text = ta.value; runMatch(); } }),
       el('button', { class: 'btn ghost', text: '부품 직접 추가', onclick: () => { state.mode = 'search'; render(); } }),
-      el('button', { class: 'btn ghost', text: '비우기', onclick: () => { build = { text: '', rows: [], misses: [], sale: '', discount: '' }; saveBuild(); render(); } })),
+      el('button', { class: 'btn ghost', text: '비우기', onclick: () => { build = { text: '', rows: [], misses: [], sale: '', discount: '' }; ocrShots = []; saveBuild(); render(); } })),
       build.rows.length ? el('div', { class: 'btnrow', style: 'margin-top:6px' },
         el('button', { class: 'btn sm', text: '상세 스펙', title: '견적 부품의 주요 스펙을 한눈에 (표·이미지로 복사 가능)', onclick: () => { state.specView = true; render(); } }),
         el('button', { class: 'btn ghost sm', text: savedById(build.savedId) ? '저장한 견적 덮어쓰기' : '견적 저장', onclick: () => saveCurrent(false) }),
