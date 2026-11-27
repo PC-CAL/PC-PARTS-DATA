@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         완본체 부품 계산기
 // @namespace    https://docs.google.com/spreadsheets/d/1BzS5KSx11k-oaLxc37x33lahjWviZfCqObnbBw54D0I
-// @version      0.21.8
+// @version      0.22.0
 // @description  완본체 판매 페이지의 사양표를 OCR로 읽어 '완본체 부품리스트&계산기' 시트에서 부품 스펙과 다나와 최저가를 찾아 견적표로 만들어 줍니다.
 // @license      MIT
 // @match        *://*/*
@@ -37,7 +37,7 @@ const __pccGM = (() => {
     menu: typeof GM_registerMenuCommand === 'function' ? GM_registerMenuCommand : null,
     info: typeof GM_info !== 'undefined' ? GM_info : (g.info || undefined)
   };
-  const KNOWN = ['pcc_build_v1', 'pcc_cache_v1', 'pcc_partial_v1', 'pcc_saved_v1', 'pcc_partcmp_v1', 'pcc_show_fab', 'pcc_fab_pos', 'pcc_shortcut', 'pcc_notes_seen_v1', 'pcc_asm_default', 'pcc_export_eval'];
+  const KNOWN = ['pcc_build_v1', 'pcc_cache_v1', 'pcc_partial_v1', 'pcc_saved_v1', 'pcc_partcmp_v1', 'pcc_show_fab', 'pcc_fab_pos', 'pcc_shortcut', 'pcc_notes_seen_v1', 'pcc_asm_default', 'pcc_export_eval', 'pcc_share_token_v1', 'pcc_notice_hidden_v1'];
   const cache = {};
   const ls = { get: (k, d) => { try { const v = localStorage.getItem('pcc:' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
     set: (k, v) => { try { localStorage.setItem('pcc:' + k, JSON.stringify(v)); } catch (e) {} } };
@@ -271,8 +271,11 @@ const PCC = (() => {
     blackRamPass(items);
     deriveAll(items);   // 스펙 통합: 검색용 항목 추가
     // 데이터 패치노트 (A 버전 | B 날짜 | C 분류 | D 내용, 최신이 위). GitHub 데이터에만 있음
-    const notes = raw['데이터 패치노트'] ? parseCsv(raw['데이터 패치노트']).slice(1).map(r => ({ ver: norm(r[0]), date: norm(r[1]), kind: norm(r[2]), text: norm(r[3]) })).filter(n => /^v\d{8}-\d+$/.test(n.ver)) : [];
-    return { items, rules, price, notes };
+    const noteRows = raw['데이터 패치노트'] ? parseCsv(raw['데이터 패치노트']).slice(1).map(r => ({ ver: norm(r[0]), date: norm(r[1]), kind: norm(r[2]), text: norm(r[3]) })) : [];
+    const notes = noteRows.filter(n => /^v\d{8}-\d+$/.test(n.ver) && n.kind !== '공지');
+    // 공지: 분류가 '공지'인 줄 (버전 칸은 비워도 됨). 줄이 있는 동안 패널 위쪽에 표시
+    const notice = noteRows.filter(n => n.kind === '공지' && n.text).map(n => ({ date: n.date, text: n.text }));
+    return { items, rules, price, notes, notice };
   }
 
   // ----- 흑금치(방열판 없는 램) 동일스펙 최저가 -----
@@ -1971,6 +1974,9 @@ const PCC = (() => {
           isTouch ? null : row('단축키', el('span', {}, '지금: ', keyText, ' '),
             el('button', { class: 'btn ghost sm', text: '바꾸기', onclick: () => { capturing = true; showToast('원하는 단축키를 누르세요. 지금: ' + comboText(getShortcut()) + ' (취소: Esc)'); const t = setInterval(() => { if (!capturing) { clearInterval(t); keyText.textContent = comboText(getShortcut()); } }, 300); } }),
             el('div', { class: 'hint', text: '아무 페이지에서나 이 단축키로 패널을 열고 닫습니다. 다른 기능과 겹치면 바꿔 주세요. (웨일은 Alt+Shift+P가 겹칩니다)' })),
+          row('공유 링크', (() => { const i = el('input', { type: 'password', placeholder: 'github_pat_… (관리자만)', value: shareToken(), style: 'width:100%;box-sizing:border-box;height:28px' });
+              i.addEventListener('change', () => { GM_setValue(SHARE_KEY, i.value.trim()); showToast(i.value.trim() ? '공유용 토큰을 저장했습니다. 이미지 메뉴에 \'공유 링크 만들기\'가 생깁니다.' : '공유용 토큰을 지웠습니다.', 2500); }); return i; })(),
+            el('div', { class: 'hint', text: '관리자 전용입니다. PC-PARTS-DATA 저장소 쓰기 권한만 있는 토큰을 넣으면 견적 이미지를 GitHub에 올리고 설치 안내가 붙은 링크를 만들 수 있습니다. 토큰은 이 브라우저에만 저장됩니다. 일반 사용자는 비워 두세요.' })),
           row('데이터', el('button', { class: 'btn ghost sm', text: '새로고침', onclick: () => { close(); if (!state.loading) loadData(true); } }),
             el('div', { class: 'hint', text: '최신 부품 데이터와 가격을 다시 받습니다.' }))),
         el('div', { class: 'btnrow', style: 'justify-content:flex-end' }, el('button', { class: 'btn sm', text: '확인', onclick: close }))));
@@ -2197,6 +2203,10 @@ const PCC = (() => {
     .notes-box { background: #fff; border-radius: 10px; width: 100%; max-width: 520px; max-height: 80%; display: flex; flex-direction: column; box-shadow: 0 8px 28px rgba(0,0,0,.25); padding: 12px 14px; }
     .notes-hd { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; } .notes-hd .x { border: none; background: none; font-size: 18px; cursor: pointer; color: #8b949e; }
     .set-row { display: grid; grid-template-columns: 72px 1fr; gap: 8px; padding: 10px 0; border-bottom: 1px solid #eef0f2; } .set-l { font-weight: 700; padding-top: 3px; } .set-v { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; } .set-chk { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+    .notice:empty { display: none; } .notice { padding: 6px 10px 0; display: flex; flex-direction: column; gap: 4px; }
+    .nt { display: flex; gap: 6px; align-items: flex-start; font-size: 12.5px; line-height: 1.45; padding: 6px 8px; border-radius: 6px; }
+    .nt-info { background: #fff8c5; color: #4d3800; border: 1px solid #eac54f; } .nt-warn { background: #fff1e5; color: #7d3a00; border: 1px solid #f0b37e; }
+    .nt-ic { flex: none; font-weight: 700; } .nt-tx { flex: 1; } .nt-x { flex: none; border: none; background: none; font-size: 15px; line-height: 1; cursor: pointer; color: inherit; padding: 0 2px; }
     .notes-tabs { display: flex; gap: 4px; margin-bottom: 8px; border-bottom: 1px solid #eef0f2; }
     .notes-tab { border: none; background: none; padding: 5px 12px; font-size: 13px; color: #57606a; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
     .notes-tab.on { color: #375623; font-weight: 700; border-bottom-color: #375623; }
@@ -2248,12 +2258,13 @@ const PCC = (() => {
       <div class="meta"></div>
       <div class="tabs"><button data-mode="build">계산기</button><button data-mode="power">파워 계산</button><button data-mode="saved">저장한 견적</button><button data-mode="search">부품 검색</button><button data-mode="parts">부품 비교</button></div>
     </header>
+    <div class="notice"></div>
     <div class="controls"></div>
     <div class="body"></div>
   </div>`;
 
   const $ = s => root.querySelector(s);
-  const panel = $('.panel'), body = $('.body'), meta = $('.meta'), controls = $('.controls'), fab = $('.fab');
+  const panel = $('.panel'), body = $('.body'), meta = $('.meta'), controls = $('.controls'), fab = $('.fab'), noticeBox = $('.notice');
   const el = (tag, props = {}, ...kids) => {
     const n = document.createElement(tag);
     for (const [k, v] of Object.entries(props)) {
@@ -2899,6 +2910,71 @@ const PCC = (() => {
   }
 
 
+  // ----- 이미지 내보내기 (버튼 하나 → 견적 / 상세 스펙 / 둘 다 + 저장·복사·공유 링크) -----
+  const stamp = () => { const d = new Date(), z = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}`; };
+  const toBlob = c => new Promise(r => c.toBlob(r, 'image/png'));
+  const stack = cs => {   // 여러 이미지를 세로로 이어 붙여 한 장으로 (복사·공유는 한 장만 되므로)
+    const w = Math.max(...cs.map(c => c.width)), h = cs.reduce((a, c) => a + c.height, 0) + (cs.length - 1) * 24;
+    const o = document.createElement('canvas'); o.width = w; o.height = h; const g = o.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, w, h);
+    let y = 0; cs.forEach(c => { g.drawImage(c, 0, y); y += c.height + 24; }); return o;
+  };
+  const download = (blob, name) => { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); };
+  const SHARE_KEY = 'pcc_share_token_v1', SHARE_REPO = 'PC-CAL/PC-PARTS-DATA', SHARE_PAGE = 'https://pc-cal.github.io/PC-PARTS-DATA/share/v.html?i=';
+  const shareToken = () => String(GM_getValue(SHARE_KEY, '') || '').trim();
+  // 관리자 전용: 이미지를 GitHub share 폴더에 올리고 설치 안내가 붙은 페이지 링크를 돌려줌
+  async function shareUpload(blob) {
+    const tok = shareToken(); if (!tok) throw new Error('공유용 GitHub 토큰이 없습니다 (설정에서 넣기)');
+    const b64 = await new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(String(fr.result).split(',')[1]); fr.onerror = no; fr.readAsDataURL(blob); });
+    const name = `est_${stamp().replace(/-/g, '')}.png`;
+    await new Promise((ok, no) => GM_xmlhttpRequest({
+      method: 'PUT', url: `https://api.github.com/repos/${SHARE_REPO}/contents/share/${name}`,
+      headers: { Authorization: 'Bearer ' + tok, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
+      data: JSON.stringify({ message: '견적 이미지 공유 ' + name, content: b64 }),
+      onload: r => r.status >= 200 && r.status < 300 ? ok() : no(new Error(r.status === 401 ? '토큰이 잘못됐거나 만료됐습니다' : r.status === 403 || r.status === 404 ? '토큰에 이 저장소 쓰기 권한이 없습니다' : 'GitHub 오류 ' + r.status)),
+      onerror: () => no(new Error('GitHub에 연결하지 못했습니다'))
+    }));
+    return SHARE_PAGE + encodeURIComponent(name);
+  }
+  // what: 'est' | 'spec' | 'both', how: 'save' | 'copy' | 'share'
+  async function imageOut(what, how, withScore, specFull) {
+    if (!build.rows.length) { showToast('견적에 부품이 없습니다.', 1800); return; }
+    const cs = [];
+    if (what !== 'spec') cs.push(['견적', toCanvas(exportData(), withScore)]);
+    if (what !== 'est') cs.push(['상세스펙', specCanvas(specRows(), specFull)]);
+    const label = what === 'both' ? '견적·상세 스펙 이미지' : what === 'est' ? '견적 이미지' : '상세 스펙 이미지';
+    if (how === 'save') { const t = stamp(); for (const [n, c] of cs) download(await toBlob(c), `완본체${n}_${t}.png`); showToast(`${label}를 저장했습니다.`, 1800); return; }
+    const one = cs.length > 1 ? stack(cs.map(x => x[1])) : cs[0][1], blob = await toBlob(one);
+    if (how === 'copy') {
+      try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); showToast(`${label}를 복사했습니다${cs.length > 1 ? ' (한 장으로 이어 붙임)' : ''}. 글쓰기 화면에 붙여넣으세요.`, 2500); }
+      catch (e) { download(blob, `완본체견적_${stamp()}.png`); showToast('이 사이트에서는 이미지 복사가 막혀 있어 파일로 저장했습니다.', 2500); }
+      return;
+    }
+    showToast('GitHub에 올리는 중…', 4000);
+    try { const url = await shareUpload(blob); copyText(url); showToast('공유 링크를 복사했습니다. 1~5분 뒤부터 열립니다.', 3500); }
+    catch (e) { showToast('공유 실패: ' + e.message, 3500); }
+  }
+  // 이미지 버튼 → 선택 창
+  function openImageMenu(defWhat, withScore, specFull) {
+    const old = root.querySelector('.notes-modal'); if (old) old.remove();
+    let what = defWhat || 'est';
+    const close = () => m.remove();
+    const opt = (v, t) => { const b = el('button', { class: what === v ? 'on' : '', text: t, onclick: () => { what = v; seg.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); } }); return b; };
+    const seg = el('div', { class: 'seg' }, opt('est', '견적'), opt('spec', '상세 스펙'), opt('both', '둘 다'));
+    const go = how => { close(); imageOut(what, how, withScore, specFull); };
+    const canCopy = !!(window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) && !isTouch;
+    const m = el('div', { class: 'notes-modal', onclick: e => { if (e.target === m) close(); } },
+      el('div', { class: 'notes-box' },
+        el('div', { class: 'notes-hd' }, el('b', { text: '이미지로 내보내기' }), el('button', { class: 'x', text: '×', title: '닫기', onclick: close })),
+        el('div', { class: 'notes-list' },
+          el('div', { class: 'hint', text: '어떤 이미지를 만들까요?' }), seg,
+          el('div', { class: 'hint', style: 'margin-top:8px', text: `'둘 다'는 저장하면 두 장, 복사${shareToken() ? '·공유 링크' : ''}는 한 장으로 이어 붙입니다.` })),
+        el('div', { class: 'btnrow', style: 'justify-content:flex-end' },
+          shareToken() ? el('button', { class: 'btn ghost sm', text: '공유 링크 만들기', title: 'GitHub에 올리고 설치 안내가 붙은 링크를 복사 (관리자 전용)', onclick: () => go('share') }) : '',
+          canCopy ? el('button', { class: 'btn ghost sm', text: '복사', onclick: () => go('copy') }) : '',
+          el('button', { class: 'btn sm', text: '저장', onclick: () => go('save') }))));
+    panel.append(m);
+  }
+
   // ----- 견적 상세 스펙 (한눈에 보기) -----
   // 부품 종류별로 보여줄 시트 열 [열 이름, 표시 이름]
   const SPEC_KEYS = {
@@ -2912,7 +2988,7 @@ const PCC = (() => {
     'CPU쿨러': [['분류'], ['팬 사양'], ['수치', '높이 / 라디'], ['수랭 호스'], ['램 높이', '램 간섭 높이']]
   };
   // 상세 스펙 '전체 항목': 남길 검색용 항목 / 여러 값을 합친 시트 칸 → 나눠서 보여 줄 항목 (11/27 결정)
-  const SPEC_KEEP = { 'CPU': ['소켓'], '메인보드': ['규격', 'x8/x8 지원'], 'RAM': ['클럭÷CL', '보증 기간'], '그래픽카드': ['슬롯 수'], 'SSD': ['TB당 TBW'],
+  const SPEC_KEEP = { 'CPU': ['소켓'], '메인보드': ['규격', 'x8/x8 지원'], 'RAM': ['클럭÷CL', '보증 기간'], '그래픽카드': ['슬롯 수'], 'SSD': ['TB당 TBW', '보증 기간'],
     '파워서플라이': ['정격 출력'], '케이스': ['부피'], 'CPU쿨러': [] };
   const SPEC_SPLIT = {
     'CPU': { '코어/스레드': ['코어 수', '스레드 수'], '소비 전력 / 권장 전원부': ['소비 전력', '권장 전원부'] },
@@ -2920,10 +2996,78 @@ const PCC = (() => {
     'RAM': { '클럭-CL': ['클럭', 'CL'], '방열판과 RGB 유무': ['방열판', 'RGB'] },
     '그래픽카드': { '소비 전력(최대 제한 전력)': ['기본 전력', '최대 제한 전력'], '쿨링팬': ['팬 개수', '팬 크기'] },
     'SSD': { '분류': ['인터페이스', '낸드 종류', '디램'] },
-    '파워서플라이': { 'Cybenetics 인증': ['사이베네틱스 효율', '사이베네틱스 소음'], '12V-2x6 케이블': ['12V-2x6 개수', '12V-2x6 최대 W'] },
+    '파워서플라이': { 'Cybenetics 인증': ['사이베네틱스 효율', '사이베네틱스 소음'] },   // 12V-2x6은 '600W 1개'처럼 합친 채로 (11/27)
     '케이스': { '사이즈': ['가로', '깊이', '높이'] },
     'CPU쿨러': { '수치': ['쿨러 높이', '라디 길이', '라디 두께', '라디+팬 두께'] }
   };
+  // ----- 상세 스펙 표시 다듬기 (11/27): 단위 붙이기, 기호 → 말, 합친 칸 정리 -----
+  const BIOS_MARK = ' ⓘ', BIOS_NOTE = 'ⓘ 바이오스 업데이트로 달라질 수 있음';
+  const hasBios = pairs => pairs.some(([, v]) => String(v).endsWith(BIOS_MARK));
+  const unit = (v, u) => /^\d+(\.\d+)?$/.test(String(v).trim()) ? String(v).trim() + u : v;
+  // 파워 정격 출력 + 12V 가용(감점·가점·비고의 '12V 가용률 91%(456W)', 99% 미만만)
+  function psuRated(it) {
+    const w = PCC.psuWatt(it); if (!w) return '';
+    const m = [it.minus, it.plus, it.note].filter(Boolean).join(' ').match(/12V\s*가용률?\s*(\d+(?:\.\d+)?)\s*%\s*\(\s*(\d+)\s*W\s*\)/i);
+    return `${w}W` + (m && Number(m[1]) < 99 ? ` (12V 가용: ${m[2]}W)` : '');
+  }
+  // 그래픽카드·메인보드 보증 기간: 기본 3년 + 가점 요소의 '보증 추가 1년' / '보증 1년 연장'
+  function warrantyGM(it) {
+    const m = String(it.plus || '').match(/보증\s*(?:추가\s*(\d+)\s*년|(\d+)\s*년\s*(?:연장|추가))/);
+    const add = m ? Number(m[1] || m[2]) : 0;
+    return add ? `${3 + add}년 (기본 3년 + 추가 ${add}년)` : '3년';
+  }
+  // 메인보드 후면 USB: 속도별 풀 스펙을 A·C로 나누고 뒤에 총 개수 (Thunderbolt는 C)
+  function rearUsb(full, a, c) {
+    const A = [], C = [];
+    String(full || '').split(/\s*,\s*/).filter(Boolean).forEach(p => {
+      const t = p.replace(/Typc-C/gi, 'Type-C');
+      (/Type-?C|Thunderbolt/i.test(t) ? C : A).push(t.replace(/\s*Type-?[AC]\s*/i, ' ').replace(/\s+/g, ' ').trim());
+    });
+    const sum = arr => arr.reduce((n, p) => n + (Number((p.match(/(\d+)\s*개/) || [])[1]) || 0), 0);
+    const line = (arr, tot) => { const n = /^\d+$/.test(String(tot).trim()) ? Number(tot) : sum(arr); return n ? `${arr.length ? arr.join(', ') + ' ' : ''}(총 ${n}개)` : '없음'; };
+    return [['후면 USB-A', line(A, a)], ['후면 USB-C', line(C, c)]];
+  }
+  const MODULAR = { 'X': '일체형', '△': '세미모듈러', 'O': '풀모듈러' };
+  // pairs: [시트 칸 이름, 값]
+  function polishSpecs(it, pairs) {
+    const cat = it.cat;
+    let out = pairs.map(([k, v]) => {
+      v = String(v ?? '').trim();
+      if (cat === '메인보드') {
+        if (k === '램 슬롯' || k === 'SATA') v = unit(v, '개');
+        else if (k === '램 용량') v = v && v !== '-' ? unit(v, 'GB') + BIOS_MARK : v;
+        else if (k === '램 속도') v = v && v !== '-' ? unit(v, 'MT/s') + BIOS_MARK : v;
+        else if (k === 'PCB') v = unit(v, '레이어');
+        else if (k === '보조전원') v = /^\d+(\+\d+)*$/.test(v) ? v + '핀' : v;
+      } else if (cat === '파워서플라이') {
+        if (k === '모듈러 여부') v = MODULAR[v] || v;
+        else if (k === '용량' || k === '@watt') return ['정격 출력', psuRated(it) || v];
+        else if (k === '정격 출력') return null;   // 위 '용량' 자리로 옮김
+      } else if (cat === '케이스') {
+        if (k === '확장') return ['드라이브 베이', v];
+        if (/(라디|팬)$/.test(k) && k !== '기본 제공 팬' && /^[xX]$/.test(v)) v = '미지원';   // 측면팬 X 등도 같이
+        if (/USB [AC]타입$/.test(k)) v = unit(v, '개');
+      } else if (cat === 'SSD') {
+        if (k === '보증 기간' && (!v || v === '-')) v = '불명';
+      }
+      return [k, v];
+    }).filter(Boolean);
+    if (cat === '메인보드') {
+      const i = out.findIndex(([k]) => k === '후면 USB 포트');
+      if (i >= 0) {
+        const g = l => (out.find(([k]) => k === l) || [])[1] || '';
+        const rep = rearUsb(out[i][1], g('후면 USB A타입'), g('후면 USB C타입'));
+        out = out.filter(([k]) => k !== '후면 USB A타입' && k !== '후면 USB C타입');
+        out.splice(out.findIndex(([k]) => k === '후면 USB 포트'), 1, ...rep);
+      }
+    }
+    if (cat === 'SSD' && !out.some(([k]) => k === '보증 기간')) {
+      const j = out.findIndex(([k]) => /TBW$/.test(k));
+      out.splice(j >= 0 ? j + 1 : out.length, 0, ['보증 기간', '불명']);
+    }
+    if (cat === '그래픽카드' || cat === '메인보드') out.push(['보증 기간', warrantyGM(it)]);
+    return out;
+  }
   // full=true: 시트의 모든 스펙 항목 (용량·개수, 메인보드 규격은 맨 앞에 덧붙임)
   function specPairs(r, full) {
     const it = byKey.get(r.key);
@@ -2946,18 +3090,15 @@ const PCC = (() => {
         if (!/^[AC]$/.test(h)) prev = h;
         body.push([label, String(v || '').trim()]);
       }
-      return head.concat(body).map(([k, v]) => [k, v || '-']);   // 빈칸도 '-'로 남겨서 어떤 항목이 비었는지 보이게
+      return head.concat(polishSpecs(it, body)).map(([k, v]) => [k, v || '-']);   // 빈칸도 '-'로 남겨서 어떤 항목이 비었는지 보이게
     }
     // 주요 항목도 시트 칸 순서대로 (용량처럼 시트에 없는 항목은 맨 앞, 파워 용량은 시트 '용량' 자리)
     const order = (it.allSpecs || it.specs).map(([h]) => h), idx = h => h === '@ramcap' ? -1 : order.indexOf(h === '@watt' ? '용량' : h);
-    return (SPEC_KEYS[it.cat] || []).filter(([h]) => h[0] === '@' || idx(h) >= 0)   // 그 제품에 없는 칸(공랭의 수랭 호스 등)은 뺌
-      .sort((a, b) => idx(a[0]) - idx(b[0])).map(([h, label]) => {
-      let v;
-      if (h === '@ramcap') v = ramCapText(it, r);
-      else if (h === '@watt') v = (it.name.match(/\d{3,4}\s*W/i) || [spec(it, '용량')])[0];
-      else v = spec(it, h);
-      return [label || h, String(v || '').trim()];
-    }).map(([k, v]) => [k, v || '-']);
+    const keys = (SPEC_KEYS[it.cat] || []).filter(([h]) => h[0] === '@' || idx(h) >= 0)   // 그 제품에 없는 칸(공랭의 수랭 호스 등)은 뺌
+      .sort((a, b) => idx(a[0]) - idx(b[0]));
+    const label = new Map(keys.map(([h, l]) => [h, l || h]));
+    const raw = keys.map(([h]) => [h, h === '@ramcap' ? ramCapText(it, r) : h === '@watt' ? (it.name.match(/\d{3,4}\s*W/i) || [spec(it, '용량')])[0] : spec(it, h)]);
+    return polishSpecs(it, raw).map(([k, v]) => [label.get(k) && k !== '정격 출력' ? label.get(k) : k, String(v || '').trim() || '-']);
   }
   const specRows = () => build.rows.filter(r => byKey.get(r.key)).sort((a, b) => CAT_ORDER.indexOf(a.cat) - CAT_ORDER.indexOf(b.cat));
   const rowTitle = r => { const it = byKey.get(r.key); return it.name + (r.opt && r.cat !== 'SSD' && r.cat !== 'RAM' && !it.name.includes(r.opt) ? ' ' + r.opt : ''); };
@@ -2967,8 +3108,7 @@ const PCC = (() => {
     controls.replaceChildren(el('div', { class: 'btnrow', style: 'align-items:center' },
       el('button', { class: 'btn ghost sm', text: '← 계산기', onclick: () => { state.specView = false; render(); } }),
       el('button', { class: 'btn sm', text: '표로 복사', onclick: () => { copyText(specText(rows, full), specHtml(rows, full)); showToast('상세 스펙을 표로 복사했습니다.', 1800); } }),
-      el('button', { class: 'btn ghost sm', text: '이미지 복사', onclick: () => specImage(rows, true, full) }),
-      el('button', { class: 'btn ghost sm', text: '이미지 저장', onclick: () => specImage(rows, false, full) })),
+      el('button', { class: 'btn ghost sm', text: '이미지', onclick: () => openImageMenu('spec', GM_getValue('pcc_export_eval', true) !== false, full) })),
       el('div', { class: 'seg', style: 'margin-top:6px' },
         el('button', { class: full ? '' : 'on', text: '주요 항목', onclick: () => { state.specFull = false; render(); } }),
         el('button', { class: full ? 'on' : '', text: '전체 항목', onclick: () => { state.specFull = true; render(); } })));
@@ -2979,21 +3119,23 @@ const PCC = (() => {
       body.append(el('div', { class: 'scard' },
         el('div', { class: 'shead' }, el('span', { class: 'cat', text: it.cat }), el('span', { class: 'snm', text: rowTitle(r) }),
           el('button', { class: 'info', text: '전체 스펙', onclick: () => { state.selected = it; render(); } })),
-        grid));
+        grid, hasBios(specPairs(r, full)) ? el('div', { class: 'hint', style: 'margin-top:4px', text: BIOS_NOTE }) : null));
     });
     body.append(el('div', { class: 'hint', style: 'padding:8px 12px 16px', text: full ? '시트의 모든 스펙 항목입니다. 복사·이미지도 전체 항목으로 만들어집니다.' : '주요 항목만 골라 보여줍니다. 위에서 "전체 항목"을 고르면 시트의 모든 항목을 보여주고, 복사·이미지도 전체 항목으로 만듭니다.' }));
   }
   function specText(rows, full) {
-    return rows.map(r => [`[${r.cat}] ${rowTitle(r)}`, ...specPairs(r, full).map(([k, v]) => `  ${k}: ${v}`)].join('\n')).join('\n\n');
+    const t = rows.map(r => [`[${r.cat}] ${rowTitle(r)}`, ...specPairs(r, full).map(([k, v]) => `  ${k}: ${v}`)].join('\n')).join('\n\n');
+    return t + (rows.some(r => hasBios(specPairs(r, full))) ? '\n\n' + BIOS_NOTE : '');
   }
   function specHtml(rows, full) {
     const e = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const td = 'style="border:1px solid #999;padding:4px 8px;vertical-align:top;font-size:13px"';
     const th = 'style="border:1px solid #999;padding:4px 8px;background:#e2efda;vertical-align:top"';
     return `<table style="border-collapse:collapse"><tr><th ${th}>부품</th><th ${th}>제품명</th><th ${th}>주요 스펙</th></tr>` +
-      rows.map(r => `<tr><th ${th}>${e(r.cat)}</th><td ${td}><b>${e(rowTitle(r))}</b></td><td ${td}>${specPairs(r, full).map(([k, v]) => `<span style="color:#57606a">${e(k)}</span> ${e(v)}`).join('<br>')}</td></tr>`).join('') + '</table>';
+      rows.map(r => `<tr><th ${th}>${e(r.cat)}</th><td ${td}><b>${e(rowTitle(r))}</b></td><td ${td}>${specPairs(r, full).map(([k, v]) => `<span style="color:#57606a">${e(k)}</span> ${e(v)}`).join('<br>')}</td></tr>`).join('') + '</table>' +
+      (rows.some(r => hasBios(specPairs(r, full))) ? `<div style="font-size:12px;color:#57606a">${e(BIOS_NOTE)}</div>` : '');
   }
-  async function specImage(rows, copy, full) {
+  function specCanvas(rows, full) {
     const S = 2, W = 900, pad = 24, colW = (W - pad * 2 - 24) / 2, keyW = 110;
     const font = (w, s) => `${w} ${s * S}px 'Malgun Gothic','Apple SD Gothic Neo','Pretendard',sans-serif`;
     const tmp = document.createElement('canvas').getContext('2d');
@@ -3037,16 +3179,8 @@ const PCC = (() => {
       });
       y += cd.h + 10;
     }
-    T(`다나와 가격 갱신 ${(db.rules.priceDate || '').replace(/^.*?:\s*/, '')} · 데이터 ${(db.rules.version || '').replace(/^.*?:\s*/, '')}`, pad, y + 18, { s: 11.5, c: '#8b949e' });
-    const blob = await new Promise(r => c.toBlob(r, 'image/png'));
-    if (copy) {
-      try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); showToast('상세 스펙 이미지를 복사했습니다.', 2000); return; }
-      catch (e) { showToast('이 사이트에서는 이미지 복사가 막혀 있어 파일로 저장합니다.', 2500); }
-    }
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-    a.download = `완본체견적_상세스펙_${new Date().toISOString().slice(0, 10)}.png`; document.body.append(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    if (!copy) showToast('상세 스펙 이미지를 저장했습니다.', 1800);
+    T(`다나와 가격 갱신 ${(db.rules.priceDate || '').replace(/^.*?:\s*/, '')} · 데이터 ${(db.rules.version || '').replace(/^.*?:\s*/, '')}` + (rows.some(r => hasBios(specPairs(r, full))) ? ' · ' + BIOS_NOTE : ''), pad, y + 18, { s: 11.5, c: '#8b949e' });
+    return c;
   }
 
   // ----- 품절(판매 정보 없음) 부품의 대체 후보 -----
@@ -3181,6 +3315,26 @@ const PCC = (() => {
 
   // ----- 그리기 -----
   let currentResults = [];
+  // 공지 띠: ① 시트 '데이터 패치노트'의 분류 '공지' 줄 ② 다나와 가격이 24시간 넘게 갱신 안 됨(자동). 각자 ×로 닫으면 내용이 바뀔 때까지 숨김
+  const NOTICE_HIDE_KEY = 'pcc_notice_hidden_v1';
+  function renderNotice() {
+    const items = [];
+    if (db) {
+      (db.notice || []).forEach(n => items.push({ id: 'n:' + n.text, kind: 'info', text: n.text, date: n.date }));
+      const m = String(db.rules.priceDate || '').match(/(\d{4})년\s*(\d+)월\s*(\d+)일\s*(?:(\d{1,2}):(\d{2}))?/);
+      if (m) {
+        const t = new Date(+m[1], m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0)), h = Math.floor((Date.now() - t) / 3600000);
+        if (h >= 24) items.push({ id: 'p:' + m[0], kind: 'warn', text: `다나와 가격이 ${h >= 48 ? Math.floor(h / 24) + '일' : h + '시간'}째 갱신되지 않았습니다 (마지막: ${+m[2]}/${+m[3]}${m[4] ? ' ' + m[4] + ':' + m[5] : ''}). 지금 가격과 다를 수 있습니다.` });
+      }
+    }
+    const hidden = GM_getValue(NOTICE_HIDE_KEY, []) || [];
+    const show = items.filter(x => !hidden.includes(x.id));
+    noticeBox.replaceChildren(...show.map(x => el('div', { class: 'nt nt-' + x.kind },
+      el('span', { class: 'nt-ic', text: x.kind === 'warn' ? '!' : '공지' }),
+      el('span', { class: 'nt-tx', text: x.text + (x.date ? ` (${x.date})` : '') }),
+      el('button', { class: 'nt-x', text: '×', title: '닫기 (내용이 바뀌면 다시 표시)', onclick: () => { GM_setValue(NOTICE_HIDE_KEY, [...hidden.filter(id => items.some(y => y.id === id)), x.id].slice(-20)); renderNotice(); } }))));
+  }
+
   function render() {
     root.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.mode === state.mode));
     const scriptVer = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) ? `스크립트 v${GM_info.script.version}` : '';
@@ -3195,6 +3349,7 @@ const PCC = (() => {
         el('div', { class: 'mrow' }, [scriptVer, `데이터 ${(db.rules.version || '버전 정보 없음').replace(/^.*?:\s*/, '')}`].filter(Boolean).map(mi)),
         el('div', { class: 'mrow' }, [price, loaded, state.progress].filter(Boolean).map(mi)));
     } else meta.replaceChildren(scriptVer ? el('div', { class: 'mrow' }, mi(scriptVer)) : '');
+    renderNotice();
     body.replaceChildren();
     panel.classList.toggle('wide', ((state.mode === 'saved' && !!state.compare) || (state.mode === 'parts' && loadPartCmp().length > 1)) && !state.selected);
     if (state.error) body.append(el('div', { class: 'msg err', text: state.error }));
@@ -3881,13 +4036,9 @@ const PCC = (() => {
         el('button', { class: 'btn ghost sm', text: '텍스트로 복사', onclick: act('plain') }),
         el('button', { class: 'btn ghost sm', text: '마크다운 복사', onclick: act('md') })),
       el('div', { class: 'ocrbar', style: 'margin-top:6px' },
-        el('button', { class: 'btn ghost sm', text: '이미지 복사', onclick: act('imgcopy') }),
-        el('button', { class: 'btn ghost sm', text: '이미지 저장', onclick: act('imgsave') }),
-        el('label', { class: 'hint', style: 'display:flex;gap:4px;align-items:center;margin-left:auto' }, scoreChk, '점수·가감점·이슈 포함')),
-      el('div', { class: 'ocrbar', style: 'margin-top:6px' },
         el('button', { class: 'btn ghost sm', text: '상세 스펙 표로 복사', title: '견적 부품의 시트 스펙 전체를 표로', onclick: () => { copyText(specText(specRows(), true), specHtml(specRows(), true)); showToast('상세 스펙(전체 항목)을 표로 복사했습니다.', 1800); } }),
-        el('button', { class: 'btn ghost sm', text: '상세 스펙 이미지 복사', onclick: () => specImage(specRows(), true, true) }),
-        el('button', { class: 'btn ghost sm', text: '상세 스펙 이미지 저장', onclick: () => specImage(specRows(), false, true) }))));
+        el('button', { class: 'btn ghost sm', text: '이미지', title: '견적·상세 스펙 이미지 저장/복사', onclick: () => openImageMenu('est', scoreChk.checked, true) }),
+        el('label', { class: 'hint', style: 'display:flex;gap:4px;align-items:center;margin-left:auto' }, scoreChk, '점수·가감점·이슈 포함'))));
   }
 
   function renderPart(row, idx) {
