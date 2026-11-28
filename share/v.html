@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>완본체 견적 · 완본체 부품 계산기</title>
+<meta property="og:title" content="완본체 견적 · 완본체 부품 계산기">
+<meta property="og:description" content="완본체 판매 페이지 사양을 다나와 최저가로 계산한 견적입니다. 계산기 설치는 그리즈포크에서.">
+<style>
+  :root { --g: #375623; --bg: #f6f8fa; --tx: #1f2328; --mu: #57606a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', Pretendard, sans-serif; background: var(--bg); color: var(--tx); }
+  header { background: var(--g); color: #fff; padding: 14px 18px; }
+  header h1 { margin: 0; font-size: 18px; }
+  header p { margin: 4px 0 0; font-size: 13px; opacity: .85; }
+  main { max-width: 920px; margin: 0 auto; padding: 16px; }
+  .img { background: #fff; border: 1px solid #d0d7de; border-radius: 10px; overflow: hidden; }
+  .img img { display: block; width: 100%; height: auto; }
+  .msg { padding: 40px 16px; text-align: center; color: var(--mu); line-height: 1.6; }
+  .promo { margin-top: 16px; background: #fff; border: 1px solid #d0d7de; border-radius: 10px; padding: 16px; line-height: 1.6; }
+  .promo h2 { margin: 0 0 6px; font-size: 16px; }
+  .promo p { margin: 0 0 10px; font-size: 14px; color: var(--mu); }
+  .btn { display: inline-block; background: var(--g); color: #fff; text-decoration: none; padding: 10px 16px; border-radius: 8px; font-weight: 700; font-size: 14px; }
+  .links { margin-top: 10px; font-size: 13px; }
+  .links a { color: #0969da; margin-right: 12px; }
+  footer { text-align: center; font-size: 12px; color: var(--mu); padding: 16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>완본체 견적</h1>
+  <p>완본체 부품 계산기로 만든 견적입니다 (가격은 다나와 최저가 기준)</p>
+</header>
+<main>
+  <div class="img" id="box"><div class="msg">견적 이미지를 불러오는 중입니다…</div></div>
+  <section class="promo">
+    <h2>완본체 부품 계산기</h2>
+    <p>완본체 판매 페이지의 사양표를 읽어서, 부품을 따로 사면 얼마인지 다나와 최저가로 계산해 주는 스크립트입니다. 호환성 검사, 파워 계산, 견적 이미지 만들기까지 됩니다.</p>
+    <a class="btn" href="https://greasyfork.org/ko/scripts/607272">설치는 여기서 (그리즈포크)</a>
+    <div class="links">
+      <a href="https://docs.google.com/spreadsheets/d/1BzS5KSx11k-oaLxc37x33lahjWviZfCqObnbBw54D0I/edit">원본 시트</a>
+      <a href="https://docs.google.com/spreadsheets/d/1BzS5KSx11k-oaLxc37x33lahjWviZfCqObnbBw54D0I/edit#gid=1908038046">데이터 패치노트</a>
+    </div>
+  </section>
+</main>
+<footer>점수·평가: 완본체 부품리스트&amp;계산기 · 가격은 실제 구매가와 다를 수 있습니다</footer>
+<script>
+  (function () {
+    var box = document.getElementById('box');
+    var name = new URLSearchParams(location.search).get('i') || '';
+    // share 폴더 안의 이미지 파일 이름만 허용 (다른 주소는 열지 않음)
+    if (!/^[\w.\-가-힣]+\.(png|jpe?g|webp)$/i.test(name)) { box.innerHTML = '<div class="msg">이미지 주소가 올바르지 않습니다.</div>'; return; }
+    var img = new Image();
+    img.alt = '완본체 견적 이미지';
+    img.onload = function () { box.innerHTML = ''; box.appendChild(img); };
+    img.onerror = function () { box.innerHTML = '<div class="msg">이미지를 찾지 못했습니다.<br>방금 올린 견적이라면 1~5분 뒤에 새로고침해 주세요.</div>'; };
+    img.src = encodeURIComponent(name);
+  })();
+</script>
+</body>
+</html>
